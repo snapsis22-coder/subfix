@@ -1,0 +1,17 @@
+# Compilación de SwiftPM
+.build/
+.swiftpm/
+*.xcodeproj
+
+# ffmpeg y ffprobe se compilan con herramientas/compilar_ffmpeg.sh; son binarios
+# de varios megas y no tienen por qué vivir en el historial.
+Resources/bin/
+Resources/FFMPEG-LICENSE.txt
+
+# Empaquetado
+*.dmg
+*.app
+
+# macOS
+.DS_Store
+._*
