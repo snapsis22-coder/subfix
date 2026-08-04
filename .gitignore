@@ -15,3 +15,6 @@ Resources/FFMPEG-LICENSE.txt
 # macOS
 .DS_Store
 ._*
+
+# Lámina de comparación: se regenera con --variantes
+dmg_assets/variantes_fondo.png
