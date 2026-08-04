@@ -147,6 +147,68 @@ probar("renumera después del recorte") {
     return limpio.hasPrefix("1\n00:01:19")
 }
 
+print("\n▸ Etiquetas de formato ASS")
+
+probar("quita {\\an8} y deja el diálogo") {
+    let conEtiqueta = """
+    1
+    00:00:01,000 --> 00:00:03,000
+    {\\an8}Calma, Caraxes.
+    """
+    let (limpio, tocadas) = TextoSRT.quitarEtiquetasASS(conEtiqueta)
+    return tocadas == 1 && limpio.contains("Calma, Caraxes.") && !limpio.contains("an8")
+}
+
+probar("traduce \\N a salto y \\h a espacio") {
+    let crudo = """
+    1
+    00:00:01,000 --> 00:00:03,000
+    {\\i1}Hola\\Nmundo{\\i0}
+
+    2
+    00:00:04,000 --> 00:00:05,000
+    Se\\hva
+    """
+    let (limpio, _) = TextoSRT.quitarEtiquetasASS(crudo)
+    return limpio.contains("Hola\nmundo") && limpio.contains("Se va") && !limpio.contains("\\N")
+}
+
+probar("respeta unas llaves de diálogo legítimo") {
+    let crudo = """
+    1
+    00:00:01,000 --> 00:00:03,000
+    Dijo {textual} eso.
+    {\\an8}Y esto no.
+    """
+    let (limpio, _) = TextoSRT.quitarEtiquetasASS(crudo)
+    return limpio.contains("{textual}") && !limpio.contains("{\\an8}")
+}
+
+probar("descarta el dibujo vectorial y renumera") {
+    let crudo = """
+    1
+    00:00:01,000 --> 00:00:02,000
+    {\\p1}m 0 0 l 100 0 100 50 0 50{\\p0}
+
+    2
+    00:00:03,000 --> 00:00:04,000
+    Diálogo real.
+    """
+    let (limpio, _) = TextoSRT.quitarEtiquetasASS(crudo)
+    return limpio.hasPrefix("1\n00:00:03") && limpio.contains("Diálogo real.")
+        && !limpio.contains("l 100 0")
+}
+
+probar("un .srt sin etiquetas queda intacto") {
+    let bueno = """
+    1
+    00:00:01,000 --> 00:00:03,000
+    Nada que tocar.
+    """
+    let (limpio, tocadas) = TextoSRT.quitarEtiquetasASS(bueno)
+    return tocadas == 0 && limpio == bueno
+}
+
 print("\n▸ Elección de pista")
 
 let latina = Pista(indice: 4, codec: "ass", idioma: "spa", titulo: "Latino", forzada: false, paraSordos: false)

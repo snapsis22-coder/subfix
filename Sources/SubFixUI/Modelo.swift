@@ -136,9 +136,10 @@ public final class Cola: ObservableObject {
 
     static func traducir(_ resultado: Motor.Resultado) -> Fila.Estado {
         switch resultado {
-        case .listo(let origen, let lineas, let publicidad):
+        case .listo(let origen, let lineas, let publicidad, let etiquetas):
             var texto = "\(lineas) líneas · \(origen)"
             if publicidad > 0 { texto += " · \(publicidad) bloque(s) de publicidad fuera" }
+            if etiquetas > 0 { texto += " · \(etiquetas) línea(s) con etiquetas de formato limpiadas" }
             return .hecha(texto)
         case .reparado(let codificacion):
             return .hecha("el .srt que ya estaba venía en \(codificacion) — corregido")

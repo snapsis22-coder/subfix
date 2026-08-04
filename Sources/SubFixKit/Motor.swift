@@ -60,7 +60,7 @@ public enum Motor {
     // MARK: - Proceso
 
     public enum Resultado: Sendable {
-        case listo(origen: String, lineas: Int, publicidadQuitada: Int)
+        case listo(origen: String, lineas: Int, publicidadQuitada: Int, etiquetasLimpiadas: Int)
         case reparado(codificacionAnterior: String)
         case yaEstaba
         case sinSubtitulos(soloImagen: Bool)
@@ -141,7 +141,8 @@ public enum Motor {
             return .sinSubtitulos(soloImagen: !diagnostico.pistasDeImagen.isEmpty)
         }
 
-        let limpio = TextoSRT.quitarPublicidad(texto)
+        let sinEtiquetas = TextoSRT.quitarEtiquetasASS(texto)
+        let limpio = TextoSRT.quitarPublicidad(sinEtiquetas.texto)
         do {
             if FileManager.default.fileExists(atPath: destino.path) {
                 try TextoSRT.apartar(destino)
@@ -151,7 +152,8 @@ public enum Motor {
             return .falló(error.localizedDescription)
         }
         let lineas = limpio.texto.components(separatedBy: "\n").count
-        return .listo(origen: origen, lineas: lineas, publicidadQuitada: limpio.quitados)
+        return .listo(origen: origen, lineas: lineas, publicidadQuitada: limpio.quitados,
+                      etiquetasLimpiadas: sinEtiquetas.tocadas)
     }
 
     // MARK: - Archivos

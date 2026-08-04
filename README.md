@@ -36,6 +36,7 @@ Además:
 
 - **Repara los `.srt` que ya están** junto a la película. Los que vienen con las descargas suelen estar en Latin-1 y sin CRLF, que es justo lo que se ve como caracteres raros. El original nunca se pisa: se guarda como `.srt.anterior`.
 - **Quita la publicidad** que los subtituladores incrustan en el primer y último bloque, y renumera lo que queda. Solo mira esos dos extremos, para no borrar diálogo por un falso positivo.
+- **Limpia las etiquetas de formato ASS.** Esas pistas llevan instrucciones entre llaves: `{\an8}` sube la línea para que no tape algo que ya está en pantalla, `{\i1}` la pone en cursiva, `{\pos(x,y)}` la coloca en un punto exacto. VLC e Infuse las obedecen; un televisor viejo no las conoce y las imprime tal cual, así que en pantalla se lee `{\an8}Calma, Caraxes.`. Se borran solo las llaves cuyo contenido empieza por barra invertida, así que un diálogo que legítimamente diga `{algo}` se queda intacto.
 - **Avisa cuando no puede.** Si la película solo trae subtítulos de imagen (PGS de Blu-ray, VobSub de DVD) y OpenSubtitles no tiene nada, lo dice claramente: eso necesita OCR y SubFix no lo hace.
 - **Limpia los archivos fantasma `._` ** que macOS deja en los discos exFAT.
 

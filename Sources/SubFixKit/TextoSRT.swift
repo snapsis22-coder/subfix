@@ -55,6 +55,76 @@ public enum TextoSRT {
         return destino
     }
 
+    // MARK: - Etiquetas de formato ASS
+
+    /// Las pistas ASS traen etiquetas entre llaves: `{\an8}` sube la línea para que no
+    /// tape algo que ya está en pantalla, `{\i1}` la pone en cursiva, `{\pos(x,y)}` la
+    /// coloca en un punto exacto. VLC o Infuse las interpretan; el Tizen del televisor
+    /// no las conoce y las imprime tal cual, así que se lee "{\an8}Calma, Caraxes.".
+    ///
+    /// Sólo se borra la llave cuyo contenido empieza por barra invertida: un diálogo que
+    /// legítimamente diga {algo} se queda intacto.
+    static let etiquetaASS = try! NSRegularExpression(pattern: "\\{\\s*\\\\[^{}]*\\}")
+    /// Un dibujo vectorial, al quitarle las llaves, deja una ristra de comandos y
+    /// coordenadas ("m 0 0 l 100 0 b 5 5 …") que no es diálogo y no debe mostrarse.
+    static let dibujoASS = try! NSRegularExpression(pattern: "^[mnlbspc\\s\\d.,+-]+$",
+                                                    options: [.caseInsensitive])
+    static let marcaDibujo = try! NSRegularExpression(pattern: "\\\\p\\s*[1-9]")
+
+    public static func quitarEtiquetasASS(_ texto: String) -> (texto: String, tocadas: Int) {
+        let bloques = texto.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: try! NSRegularExpression(pattern: "\r?\n\\s*\r?\n"))
+        var salida: [String] = []
+        var tocadas = 0
+
+        for bloque in bloques {
+            let lineas = bloque.components(separatedBy: "\n")
+            guard let corte = lineas.firstIndex(where: { $0.contains("-->") }) else {
+                salida.append(bloque)          // bloque raro: no se toca
+                continue
+            }
+            let cabecera = Array(lineas[...corte])
+            var cuerpo: [String] = []
+            for linea in lineas[(corte + 1)...] {
+                let eraDibujo = coincide(marcaDibujo, linea)
+                var limpia = etiquetaASS.stringByReplacingMatches(
+                    in: linea, range: NSRange(linea.startIndex..., in: linea), withTemplate: "")
+                // \N salto duro, \h espacio irrompible, \n salto blando (= espacio).
+                limpia = limpia.replacingOccurrences(of: "\\N", with: "\n")
+                limpia = limpia.replacingOccurrences(of: "\\h", with: " ")
+                limpia = limpia.replacingOccurrences(of: "\\n", with: " ")
+                if limpia != linea { tocadas += 1 }
+                for trozo in limpia.components(separatedBy: "\n") {
+                    let t = trozo.trimmingCharacters(in: .whitespaces)
+                    if t.isEmpty { continue }
+                    if eraDibujo, coincide(dibujoASS, t) { continue }
+                    cuerpo.append(t)
+                }
+            }
+            if !cuerpo.isEmpty {               // si queda vacío, el bloque sobra
+                salida.append((cabecera + cuerpo).joined(separator: "\n"))
+            }
+        }
+        guard tocadas > 0 else { return (texto, 0) }
+        return (renumerar(salida), tocadas)
+    }
+
+    private static func coincide(_ regex: NSRegularExpression, _ s: String) -> Bool {
+        regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+    }
+
+    /// Tras quitar bloques hay que renumerar, o el reproductor ve saltos en la cuenta.
+    private static func renumerar(_ bloques: [String]) -> String {
+        let renumerados = bloques.enumerated().map { indice, bloque -> String in
+            var lineas = bloque.components(separatedBy: "\n")
+            if let primera = lineas.first, Int(primera.trimmingCharacters(in: .whitespaces)) != nil {
+                lineas[0] = String(indice + 1)
+            }
+            return lineas.joined(separator: "\n")
+        }
+        return renumerados.joined(separator: "\n\n") + "\n"
+    }
+
     // MARK: - Publicidad
 
     /// Los subtituladores meten propaganda en el primer y último bloque. Sólo se
@@ -78,16 +148,7 @@ public enum TextoSRT {
             bloques.removeLast(); quitados += 1
         }
         guard quitados > 0 else { return (texto, 0) }
-
-        // Renumerar tras el recorte, o el reproductor ve saltos en la cuenta.
-        let renumerados = bloques.enumerated().map { indice, bloque -> String in
-            var lineas = bloque.components(separatedBy: "\n")
-            if let primera = lineas.first, Int(primera.trimmingCharacters(in: .whitespaces)) != nil {
-                lineas[0] = String(indice + 1)
-            }
-            return lineas.joined(separator: "\n")
-        }
-        return (renumerados.joined(separator: "\n\n") + "\n", quitados)
+        return (renumerar(bloques), quitados)
     }
 
     private static func esPublicidad(_ bloque: String) -> Bool {
