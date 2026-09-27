@@ -32,17 +32,22 @@ Para cada película busca subtítulo en español en tres niveles y se queda con 
 2. **Archivo `.srt` o `.ass` suelto** de la carpeta o de un subdirectorio `Subs/`, corrigiéndole la codificación. Un suelto que no lleve el nombre del vídeo solo se adopta si es la única película de la carpeta: con varias juntas, adivinar significa ponerle a una los diálogos de otra.
 3. **OpenSubtitles** — primero por *hash* del archivo, que identifica tu versión exacta y llega sincronizado; si no aparece, por título, avisando de que conviene revisar la sincronía.
 
+**Series en latino.** Los capítulos de series (los que llevan `S01E01` en el nombre) suelen traer incrustado solo el español de España. Con la casilla *Series en latino* activada, antes que la pista incrustada se busca el español latino en **Addic7ed**, eligiendo la versión que más se parece al nombre de tu archivo, que es la que va sincronizada. Si no hay latino, se usa la pista incrustada. Si eliges una pista a mano, manda tu elección.
+
 Además:
 
 - **Repara los `.srt` que ya están** junto a la película. Los que vienen con las descargas suelen estar en Latin-1 y sin CRLF, que es justo lo que se ve como caracteres raros. El original nunca se pisa: se guarda como `.srt.anterior`.
 - **Quita la publicidad** que los subtituladores incrustan en el primer y último bloque, y renumera lo que queda. Solo mira esos dos extremos, para no borrar diálogo por un falso positivo.
 - **Limpia las etiquetas de formato ASS.** Esas pistas llevan instrucciones entre llaves: `{\an8}` sube la línea para que no tape algo que ya está en pantalla, `{\i1}` la pone en cursiva, `{\pos(x,y)}` la coloca en un punto exacto. VLC e Infuse las obedecen; un televisor viejo no las conoce y las imprime tal cual, así que en pantalla se lee `{\an8}Calma, Caraxes.`. Se borran solo las llaves cuyo contenido empieza por barra invertida, así que un diálogo que legítimamente diga `{algo}` se queda intacto.
+- **Depura los caracteres basura.** Quita las etiquetas HTML (`<i>`, `<font color=…>`), los caracteres invisibles (espacios de ancho cero, marcas de dirección, guiones blandos), compone las tildes que vienen separadas de su letra y deshace el texto doblemente codificado (`Ã©` → `é`). Un `<3` o un `#hashtag` del diálogo se quedan como están.
 - **Avisa cuando no puede.** Si la película solo trae subtítulos de imagen (PGS de Blu-ray, VobSub de DVD) y OpenSubtitles no tiene nada, lo dice claramente: eso necesita OCR y SubFix no lo hace.
 - **Limpia los archivos fantasma `._` ** que macOS deja en los discos exFAT.
 
 ## Cómo se usa
 
 **Películas** — arrastras archivos o una carpeta entera. Antes de tocar nada te muestra qué piensa hacer con cada una, y si hay varias pistas de texto puedes cambiar la elegida.
+
+Con *Carpeta por capítulo* activada, cada capítulo se mueve con su `.srt` a una subcarpeta propia (`Ted Lasso S01E01/`). Dentro del mismo disco es un renombrado instantáneo, solo se mueve lo que quedó con subtítulo y nunca se pisa nada.
 
 **Vigilar carpeta** — le señalas tu carpeta de descargas y se encarga sola. Repasa cada 30 segundos, espera a que el archivo deje de crecer para no procesar una descarga a medias, y avisa con una notificación.
 
@@ -76,7 +81,7 @@ Como no entra x264 ni x265, lo que se empaqueta es **LGPL 2.1** y no GPL. La lic
 ## Estructura
 
 ```
-Sources/SubFixKit   motor: sondeo, extracción, formato para el TV, OpenSubtitles
+Sources/SubFixKit   motor: sondeo, extracción, formato para el TV, OpenSubtitles, Addic7ed
 Sources/SubFixUI    las vistas
 Sources/SubFix      el ejecutable, que solo abre la ventana
 Sources/subfixtests pruebas, con arnés propio
