@@ -39,7 +39,7 @@ public struct VistaPrincipal: View {
             case .vigilancia: VistaVigilancia(vigilante: vigilante)
             }
         }
-        .frame(minWidth: 620, minHeight: 460)
+        .frame(minWidth: 760, minHeight: 460)
         .overlay(alignment: .bottom) {
             if let mensaje = cola.mensajeDeHerramientas {
                 AvisoDeHerramientas(mensaje: mensaje)
@@ -61,7 +61,7 @@ struct VistaPeliculas: View {
             } else {
                 List {
                     ForEach(cola.filas) { fila in
-                        FilaDePelicula(fila: fila) { indice in
+                        FilaDePelicula(fila: fila, preferirLatino: cola.preferirLatino && cola.usarRed) { indice in
                             cola.elegirPista(fila.id, indice: indice)
                         }
                     }
@@ -84,6 +84,16 @@ struct VistaPeliculas: View {
             Toggle("Buscar en OpenSubtitles", isOn: $cola.usarRed)
                 .toggleStyle(.checkbox)
                 .help("Cuando la película no trae subtítulo de texto, se busca uno en internet")
+
+            Toggle("Series en latino", isOn: $cola.preferirLatino)
+                .toggleStyle(.checkbox)
+                .disabled(!cola.usarRed)
+                .help("En los capítulos de series se busca primero el español latino en Addic7ed; "
+                      + "la pista que traen embebida suele ser la de España")
+
+            Toggle("Carpeta por capítulo", isOn: $cola.organizar)
+                .toggleStyle(.checkbox)
+                .help("Mueve cada capítulo con su .srt a una subcarpeta propia, p. ej. «Ted Lasso S01E01»")
 
             Spacer()
 
@@ -140,6 +150,7 @@ struct ZonaVacia: View {
 
 struct FilaDePelicula: View {
     let fila: Fila
+    let preferirLatino: Bool
     let elegirPista: (Int) -> Void
 
     var body: some View {
@@ -156,7 +167,7 @@ struct FilaDePelicula: View {
                     .truncationMode(.middle)
                     .help(fila.url.path)
 
-                Text(fila.estado.detalle ?? fila.diagnostico?.plan ?? "")
+                Text(fila.estado.detalle ?? fila.diagnostico?.plan(preferirLatino: preferirLatino) ?? "")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

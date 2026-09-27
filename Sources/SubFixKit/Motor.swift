@@ -28,6 +28,18 @@ public enum Motor {
             return "Sin subtítulos — buscar en OpenSubtitles"
         }
 
+        /// Lo mismo que `plan`, contando con que se busque latino para las series.
+        public func plan(preferirLatino: Bool) -> String {
+            guard preferirLatino, esEpisodio, error == nil, srtExistente == nil,
+                  elegida?.esLatino != true else { return plan }
+            if let elegida { return "Buscar latino en Addic7ed · si no hay, \(elegida.codec) · \(elegida.idioma ?? "?")" }
+            return "Buscar latino en Addic7ed"
+        }
+
+        public var esEpisodio: Bool { carpeta != nil }
+        /// «Ted Lasso S01E01» si el archivo es un capítulo de serie.
+        public let carpeta: String?
+
         public var necesitaRed: Bool {
             srtExistente == nil && elegida == nil && suelto == nil
         }
@@ -36,6 +48,7 @@ public enum Motor {
     public static func diagnosticar(_ video: URL) -> Diagnostico {
         let destino = destinoSRT(de: video)
         let existente = FileManager.default.fileExists(atPath: destino.path) ? destino : nil
+        let carpeta = carpetaDeCapitulo(para: video)
 
         do {
             let pistas = try Sondeo.pistas(de: video)
@@ -48,19 +61,20 @@ public enum Motor {
                                suelto: mejor == nil ? sueltoPara(video) : nil,
                                srtExistente: existente,
                                srtBienFormado: existente.map(TextoSRT.estaBienFormado) ?? false,
-                               error: nil)
+                               error: nil, carpeta: carpeta)
         } catch {
             return Diagnostico(pistas: [], elegida: nil, hayEmpate: false, suelto: nil,
                                srtExistente: existente,
                                srtBienFormado: existente.map(TextoSRT.estaBienFormado) ?? false,
-                               error: error.localizedDescription)
+                               error: error.localizedDescription, carpeta: carpeta)
         }
     }
 
     // MARK: - Proceso
 
     public enum Resultado: Sendable {
-        case listo(origen: String, lineas: Int, publicidadQuitada: Int, etiquetasLimpiadas: Int)
+        case listo(origen: String, lineas: Int, publicidadQuitada: Int, etiquetasLimpiadas: Int,
+                   caracteresDepurados: Int)
         case reparado(codificacionAnterior: String)
         case yaEstaba
         case sinSubtitulos(soloImagen: Bool)
@@ -78,11 +92,16 @@ public enum Motor {
         public var usarRed: Bool
         public var forzar: Bool
         public var pistaPreferida: Int?
+        /// En series, buscar primero el latino en Addic7ed aunque el archivo
+        /// traiga una pista en español (casi siempre es la de España).
+        public var preferirLatino: Bool
 
-        public init(usarRed: Bool = true, forzar: Bool = false, pistaPreferida: Int? = nil) {
+        public init(usarRed: Bool = true, forzar: Bool = false, pistaPreferida: Int? = nil,
+                    preferirLatino: Bool = false) {
             self.usarRed = usarRed
             self.forzar = forzar
             self.pistaPreferida = pistaPreferida
+            self.preferirLatino = preferirLatino
         }
     }
 
@@ -96,7 +115,7 @@ public enum Motor {
             do {
                 let (texto, codificacion) = try TextoSRT.leer(destino)
                 try TextoSRT.apartar(destino)
-                try TextoSRT.escribirParaElTV(texto, en: destino)
+                try TextoSRT.escribirParaElTV(TextoSRT.depurarCaracteres(texto).texto, en: destino)
                 return .reparado(codificacionAnterior: codificacion)
             } catch {
                 return .falló(error.localizedDescription)
@@ -115,7 +134,15 @@ public enum Motor {
             diagnostico.pistas.first { $0.indice == indice }
         } ?? diagnostico.elegida
 
-        if let pista {
+        // Si el usuario eligió la pista a mano, manda él.
+        let latino = opciones.usarRed && opciones.preferirLatino && diagnostico.esEpisodio
+            && opciones.pistaPreferida == nil && pista?.esLatino != true
+            ? await Addic7ed.buscarLatino(para: video) : nil
+
+        if let latino {
+            texto = latino.texto
+            origen = latino.explicacion
+        } else if let pista {
             let temporal = FileManager.default.temporaryDirectory
                 .appendingPathComponent("subfix-\(UUID().uuidString).srt")
             defer { try? FileManager.default.removeItem(at: temporal) }
@@ -142,7 +169,8 @@ public enum Motor {
         }
 
         let sinEtiquetas = TextoSRT.quitarEtiquetasASS(texto)
-        let limpio = TextoSRT.quitarPublicidad(sinEtiquetas.texto)
+        let depurado = TextoSRT.depurarCaracteres(sinEtiquetas.texto)
+        let limpio = TextoSRT.quitarPublicidad(depurado.texto)
         do {
             if FileManager.default.fileExists(atPath: destino.path) {
                 try TextoSRT.apartar(destino)
@@ -153,10 +181,57 @@ public enum Motor {
         }
         let lineas = limpio.texto.components(separatedBy: "\n").count
         return .listo(origen: origen, lineas: lineas, publicidadQuitada: limpio.quitados,
-                      etiquetasLimpiadas: sinEtiquetas.tocadas)
+                      etiquetasLimpiadas: sinEtiquetas.tocadas, caracteresDepurados: depurado.tocadas)
     }
 
     // MARK: - Archivos
+
+    /// «Ted.Lasso.S01E01.HDR.2160p….mkv» → «Ted Lasso S01E01». Nil si no es un capítulo.
+    public static func carpetaDeCapitulo(para video: URL) -> String? {
+        let nombre = video.deletingPathExtension().lastPathComponent
+        guard let marca = nombre.range(of: "[Ss](\\d{1,2})[\\s._-]?[Ee](\\d{1,3})",
+                                       options: .regularExpression) else { return nil }
+        let (_, temporada, episodio) = OpenSubtitles.tituloLimpio(video)
+        guard let temporada, let episodio else { return nil }
+
+        let serie = String(nombre[..<marca.lowerBound])
+            .replacingOccurrences(of: "[._\\[\\]()-]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let codigo = String(format: "S%02dE%02d", temporada, episodio)
+        return serie.isEmpty ? codigo : "\(serie) \(codigo)"
+    }
+
+    /// Mete el capítulo y su .srt en una subcarpeta propia, junto a donde estaban.
+    /// Mover dentro del mismo disco es renombrar: no copia los gigas. Nunca pisa
+    /// nada; si el destino ya existe, lo deja todo como estaba.
+    @discardableResult
+    public static func organizarPorCapitulo(_ video: URL) throws -> URL {
+        guard let nombre = carpetaDeCapitulo(para: video) else { return video }
+        let actual = video.deletingLastPathComponent()
+        guard actual.lastPathComponent != nombre else { return video }   // ya estaba
+
+        let carpeta = actual.appendingPathComponent(nombre, isDirectory: true)
+        let gestor = FileManager.default
+        try gestor.createDirectory(at: carpeta, withIntermediateDirectories: true)
+
+        let base = video.deletingPathExtension().lastPathComponent
+        let acompañantes = ((try? gestor.contentsOfDirectory(atPath: actual.path)) ?? [])
+            .filter { $0.hasPrefix(base + ".") && !$0.hasPrefix("._")
+                      && $0 != video.lastPathComponent
+                      && ($0.hasSuffix(".srt") || $0.contains(".srt.anterior")) }
+            .map { actual.appendingPathComponent($0) }
+
+        for archivo in [video] + acompañantes {
+            let destino = carpeta.appendingPathComponent(archivo.lastPathComponent)
+            if gestor.fileExists(atPath: destino.path) {
+                throw ErrorDeSubFix.yaExiste(destino.lastPathComponent)
+            }
+        }
+        for archivo in [video] + acompañantes {
+            try gestor.moveItem(at: archivo, to: carpeta.appendingPathComponent(archivo.lastPathComponent))
+        }
+        return carpeta.appendingPathComponent(video.lastPathComponent)
+    }
 
     /// El .srt debe llamarse exactamente como el video: un «pelicula.es.srt» el
     /// TV lo trata como archivo ajeno y no lo ofrece.

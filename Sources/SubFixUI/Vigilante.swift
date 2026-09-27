@@ -69,7 +69,7 @@ public final class Vigilante: ObservableObject {
                 continue
             }
 
-            let resultado = await Motor.procesar(video)
+            let resultado = await Motor.procesar(video, opciones: Motor.Opciones(preferirLatino: true))
             atendidos.insert(video.path)
             anotar(video, resultado)
         }

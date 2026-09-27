@@ -209,6 +209,32 @@ probar("un .srt sin etiquetas queda intacto") {
     return tocadas == 0 && limpio == bueno
 }
 
+print("\n▸ Caracteres basura")
+
+probar("quita etiquetas HTML e invisibles y compone las tildes") {
+    let crudo = "1\n00:00:01,000 --> 00:00:02,000\n<i>¿Quiénes\u{200B} sois?</i>\n<font color=\"#ffff00\">Cafe\u{0301}\u{00A0}solo</font>\n"
+    let (limpio, tocadas) = TextoSRT.depurarCaracteres(crudo)
+    return tocadas == 2 && limpio.contains("¿Quiénes sois?\nCafé solo")
+        && !limpio.contains("<") && !limpio.contains("\u{200B}")
+}
+
+probar("deshace el doble codificado (Ã© → é)") {
+    let (limpio, _) = TextoSRT.depurarCaracteres("1\n00:00:01,000 --> 00:00:02,000\nÂ¿DÃ³nde estÃ¡ la niÃ±a?\n")
+    return limpio.contains("¿Dónde está la niña?")
+}
+
+probar("respeta un «<3» y un «#Richmond» del diálogo") {
+    let bueno = "1\n00:00:01,000 --> 00:00:02,000\nTe quiero <3, evita #Richmond."
+    let (limpio, tocadas) = TextoSRT.depurarCaracteres(bueno)
+    return tocadas == 0 && limpio == bueno
+}
+
+probar("un bloque que era sólo etiquetas desaparece y se renumera") {
+    let crudo = "1\n00:00:01,000 --> 00:00:02,000\n<i></i>\n\n2\n00:00:03,000 --> 00:00:04,000\nHola."
+    let (limpio, _) = TextoSRT.depurarCaracteres(crudo)
+    return limpio.hasPrefix("1\n00:00:03") && limpio.contains("Hola.")
+}
+
 print("\n▸ Elección de pista")
 
 let latina = Pista(indice: 4, codec: "ass", idioma: "spa", titulo: "Latino", forzada: false, paraSordos: false)
@@ -291,6 +317,57 @@ probar("descomprime un .gz igual que gunzip") {
     return String(data: descomprimido, encoding: .utf8) == plano
 }
 
+print("\n▸ Addic7ed y carpetas por capítulo")
+
+// Recorte real de la página de Ted Lasso 1x05 filtrada por latino, con dos versiones.
+let paginaAddic7ed = """
+<td colspan="3" align="center" class="NewsTitle"><img />Version BTW+ION10+NOGRP+R.I.P.SCENE, Duration: 0.00 </td>
+<td width="21%" class="language">Spanish (Latin America)<a href="javascript:saveFavorite(160075,6,1)"></a></td>
+<td width="19%"><b>Completed </b> </td><td colspan="3"><a class="face-button" href="/original/160075/72">
+<img title="Corrected" /><img title="Hearing Impaired" />0 times edited · 455 Downloads · 618 sequences
+<td colspan="3" align="center" class="NewsTitle"><img />Version ATVP.WEB-DL-NTb, Duration: 0.00 </td>
+<td width="21%" class="language">Spanish (Latin America)</td>
+<td width="19%"><b>35.42% Completed</b> </td><td colspan="3"><a class="face-button" href="/original/160075/32">
+0 times edited · 12 Downloads · 618 sequences
+"""
+
+probar("lee las versiones de la página de Addic7ed") {
+    let v = Addic7ed.versiones(en: paginaAddic7ed)
+    return v.count == 2
+        && v[0].nombre == "BTW+ION10+NOGRP+R.I.P.SCENE" && v[0].enlace == "/original/160075/72"
+        && v[0].completa && v[0].paraSordos && v[0].descargas == 455
+        && v[1].completa == false          // una traducción a medias no sirve
+}
+
+probar("el nombre de la serie va con mayúsculas en la URL") {
+    Addic7ed.nombreEnURL("ted lasso") == "Ted_Lasso"
+}
+
+let capitulo = URL(fileURLWithPath: "/x/Ted.Lasso.S01E09.HDR.2160p.WEB-DL.DDP5.1.H.265-ROCCaT.mkv")
+probar("nombre de la carpeta del capítulo") {
+    Motor.carpetaDeCapitulo(para: capitulo) == "Ted Lasso S01E09"
+        && Motor.carpetaDeCapitulo(para: URL(fileURLWithPath: "/x/The.Batman.2022.1080p.mkv")) == nil
+}
+
+probar("organizar mete el capítulo y su .srt en su carpeta, y no toca a los demás") {
+    let serie = temporal.appendingPathComponent("serie", isDirectory: true)
+    try FileManager.default.createDirectory(at: serie, withIntermediateDirectories: true)
+    let e1 = serie.appendingPathComponent("Show.Name.S02E01.WEB.mkv")
+    let e2 = serie.appendingPathComponent("Show.Name.S02E02.WEB.mkv")
+    for archivo in [e1, e2, Motor.destinoSRT(de: e1), Motor.destinoSRT(de: e2)] {
+        try Data("x".utf8).write(to: archivo)
+    }
+    let nuevo = try Motor.organizarPorCapitulo(e1)
+    let carpeta = serie.appendingPathComponent("Show Name S02E01")
+    let gestor = FileManager.default
+    let otraVez = try Motor.organizarPorCapitulo(nuevo)      // repetir no anida carpetas
+    return otraVez == nuevo && nuevo == carpeta.appendingPathComponent(e1.lastPathComponent)
+        && gestor.fileExists(atPath: nuevo.path)
+        && gestor.fileExists(atPath: Motor.destinoSRT(de: nuevo).path)
+        && !gestor.fileExists(atPath: e1.path)
+        && gestor.fileExists(atPath: e2.path) && gestor.fileExists(atPath: Motor.destinoSRT(de: e2).path)
+}
+
 print("\n▸ Herramientas")
 
 probar("encuentra ffmpeg y ffprobe") {
@@ -332,6 +409,11 @@ await probarEsperando("al terminar el análisis la cola tiene pendientes (botón
 
 await probarEsperando("el diagnóstico llega a la fila") {
     await MainActor.run { cola.filas.first?.diagnostico?.elegida?.codec } == "subrip"
+}
+
+await probarEsperando("una película no se busca en Addic7ed aunque se prefiera latino") {
+    guard let d = await MainActor.run(body: { cola.filas.first?.diagnostico }) else { return false }
+    return !d.esEpisodio && !d.plan(preferirLatino: true).contains("Addic7ed")
 }
 
 await MainActor.run { cola.procesarTodo() }

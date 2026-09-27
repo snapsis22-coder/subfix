@@ -125,6 +125,65 @@ public enum TextoSRT {
         return renumerados.joined(separator: "\n\n") + "\n"
     }
 
+    // MARK: - Caracteres basura
+
+    /// Lo que el Tizen imprime tal cual o como cuadritos, más allá de la codificación:
+    /// etiquetas HTML (`<i>`, `<font color=…>`), invisibles (espacios de ancho cero,
+    /// marcas de dirección, guiones blandos, controles) y tildes descompuestas
+    /// (una «e» seguida de un acento suelto, que su fuente pinta como «e□»).
+    static let etiquetaHTML = try! NSRegularExpression(
+        pattern: "</?(?:i|b|u|s|em|strong|font|span|br)\\b[^<>]*>", options: [.caseInsensitive])
+    static let invisibles = try! NSRegularExpression(
+        pattern: "[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\uFEFF\\u00AD"
+               + "\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]")
+    /// «Ã©», «Ã±», «Â¿»: UTF-8 leído como Latin-1 y guardado otra vez.
+    static let mojibake = try! NSRegularExpression(pattern: "Ã[\\u0080-\\u00BF]|Â[¡¿]")
+
+    public static func depurarCaracteres(_ texto: String) -> (texto: String, tocadas: Int) {
+        var base = texto
+        var tocadas = 0
+
+        // Primero el doble codificado, sobre el texto entero: deshacerlo es
+        // volver a Latin-1 y leer esos bytes como UTF-8. Sólo si sale limpio.
+        let rotas = mojibake.numberOfMatches(in: base, range: NSRange(base.startIndex..., in: base))
+        if rotas > 0, let bytes = base.data(using: .windowsCP1252),
+           let arreglado = String(data: bytes, encoding: .utf8) {
+            base = arreglado
+            tocadas += rotas
+        }
+
+        let bloques = base.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: try! NSRegularExpression(pattern: "\r?\n\\s*\r?\n"))
+        var salida: [String] = []
+
+        for bloque in bloques {
+            let lineas = bloque.components(separatedBy: "\n")
+            guard let corte = lineas.firstIndex(where: { $0.contains("-->") }) else {
+                salida.append(bloque)
+                continue
+            }
+            var cuerpo: [String] = []
+            for linea in lineas[(corte + 1)...] {
+                var limpia = linea.replacingOccurrences(of: "\r", with: "")
+                for regex in [etiquetaHTML, invisibles] {
+                    limpia = regex.stringByReplacingMatches(
+                        in: limpia, range: NSRange(limpia.startIndex..., in: limpia), withTemplate: "")
+                }
+                limpia = limpia.replacingOccurrences(of: "\u{00A0}", with: " ")
+                    .precomposedStringWithCanonicalMapping
+                    .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespaces)
+                if limpia != linea.trimmingCharacters(in: .whitespacesAndNewlines) { tocadas += 1 }
+                if !limpia.isEmpty { cuerpo.append(limpia) }
+            }
+            if !cuerpo.isEmpty {               // una línea que era sólo «<i></i>» sobra
+                salida.append((Array(lineas[...corte]) + cuerpo).joined(separator: "\n"))
+            }
+        }
+        guard tocadas > 0 else { return (texto, 0) }
+        return (renumerar(salida), tocadas)
+    }
+
     // MARK: - Publicidad
 
     /// Los subtituladores meten propaganda en el primer y último bloque. Sólo se

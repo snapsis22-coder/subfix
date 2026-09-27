@@ -10,7 +10,7 @@ import SwiftUI
 /// única fuente de verdad, cualquier cambio repinta toda la pantalla.
 public struct Fila: Identifiable, Equatable {
     public let id = UUID()
-    public let url: URL
+    public internal(set) var url: URL
 
     public internal(set) var diagnostico: Motor.Diagnostico?
     var estado: Estado = .analizando
@@ -68,6 +68,8 @@ public final class Cola: ObservableObject {
     @Published public var filas: [Fila] = []
     @Published public var trabajando = false
     @Published public var usarRed = true
+    @Published public var preferirLatino = true
+    @Published public var organizar = false
     @Published public var mensajeDeHerramientas: String?
 
     public init() {
@@ -120,26 +122,47 @@ public final class Cola: ObservableObject {
         trabajando = true
         let porHacer = pendientes
         let red = usarRed
+        let latino = preferirLatino
+        let organizarlos = organizar
+        var carpetas = Set(porHacer.map { $0.url.deletingLastPathComponent() })
 
         Task {
             for fila in porHacer {
                 cambiar(fila.id) { $0.estado = .procesando }
                 let opciones = Motor.Opciones(usarRed: red, forzar: false,
-                                              pistaPreferida: fila.pistaElegida)
+                                              pistaPreferida: fila.pistaElegida,
+                                              preferirLatino: latino)
                 let resultado = await Motor.procesar(fila.url, opciones: opciones)
-                cambiar(fila.id) { $0.estado = Self.traducir(resultado) }
+                var estado = Self.traducir(resultado)
+
+                // Sólo se mueve lo que quedó con subtítulo: lo que falló se queda
+                // a la vista, donde estaba.
+                if organizarlos, resultado.fueBien, fila.diagnostico?.esEpisodio == true {
+                    do {
+                        let nueva = try Motor.organizarPorCapitulo(fila.url)
+                        carpetas.insert(nueva.deletingLastPathComponent())
+                        cambiar(fila.id) { $0.url = nueva }
+                        if case .hecha(let texto) = estado {
+                            estado = .hecha(texto + " · en «\(nueva.deletingLastPathComponent().lastPathComponent)»")
+                        }
+                    } catch {
+                        estado = .avisada("subtítulo listo, pero \(error.localizedDescription)")
+                    }
+                }
+                cambiar(fila.id) { $0.estado = estado }
             }
-            Motor.limpiarFantasmas(en: Set(porHacer.map { $0.url.deletingLastPathComponent() }))
+            Motor.limpiarFantasmas(en: carpetas)
             trabajando = false
         }
     }
 
     static func traducir(_ resultado: Motor.Resultado) -> Fila.Estado {
         switch resultado {
-        case .listo(let origen, let lineas, let publicidad, let etiquetas):
+        case .listo(let origen, let lineas, let publicidad, let etiquetas, let depurados):
             var texto = "\(lineas) líneas · \(origen)"
             if publicidad > 0 { texto += " · \(publicidad) bloque(s) de publicidad fuera" }
             if etiquetas > 0 { texto += " · \(etiquetas) línea(s) con etiquetas de formato limpiadas" }
+            if depurados > 0 { texto += " · \(depurados) línea(s) con caracteres basura depuradas" }
             return .hecha(texto)
         case .reparado(let codificacion):
             return .hecha("el .srt que ya estaba venía en \(codificacion) — corregido")
