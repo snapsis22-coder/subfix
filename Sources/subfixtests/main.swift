@@ -243,6 +243,45 @@ probar("reconoce inglés disfrazado de español, y el español de los dos lados"
         && TextoSRT.pareceEspañol("1\n00:00:01,000 --> 00:00:02,000\nOK.")     // poco texto: no se juzga
 }
 
+let textoEspaña = "1\n00:00:00,000 --> 00:00:00,900\n¿Quiénes sois vosotros?\n\n2\n00:00:01,000 --> 00:00:01,900\nOs lo dije, tío.\n\n3\n00:00:02,000 --> 00:00:02,900\n¿Tenéis hambre?\n\n4\n00:00:03,000 --> 00:00:03,900\n¿Qué queréis?\n\n5\n00:00:04,000 --> 00:00:04,900\nVale, ¿podéis callaros?\n"
+let textoLatino = "1\n00:00:00,000 --> 00:00:00,900\n¿Quiénes son ustedes?\n\n2\n00:00:01,000 --> 00:00:01,900\nSe los dije.\n\n3\n00:00:02,000 --> 00:00:02,900\n¿Tienen hambre?\n\n4\n00:00:03,000 --> 00:00:03,900\n¿Qué quieren?\n\n5\n00:00:04,000 --> 00:00:04,900\nEstá bien, ¿se pueden callar?\n"
+
+probar("distingue el español de España del latino") {
+    TextoSRT.pareceDeEspaña(textoEspaña) && !TextoSRT.pareceDeEspaña(textoLatino)
+        && !TextoSRT.pareceDeEspaña("Tiene dieciséis años y veintiséis primos. Dieciséis. Veintiséis. Dieciséis.")
+}
+
+print("\n▸ Subtítulos bajados a mano (Subdivx)")
+
+let bajados = temporal.appendingPathComponent("bajados", isDirectory: true)
+try? FileManager.default.createDirectory(at: bajados, withIntermediateDirectories: true)
+let srtEspaña = bajados.appendingPathComponent("Show.S01E02.Biscuits (Español (España)).srt")
+let srtLatino = bajados.appendingPathComponent("Show.S01E02.Biscuits (Español (Latinoamérica)).srt")
+try? textoEspaña.data(using: .windowsCP1252)!.write(to: srtEspaña)       // como llegan de Subdivx
+try? textoLatino.data(using: .windowsCP1252)!.write(to: srtLatino)
+let zipBajado = temporal.appendingPathComponent("Show S01E02 - [MarcusL].zip")
+_ = try? Herramientas.correr("bsdtar", ["-a", "-cf", zipBajado.path, "-C", bajados.path,
+                                         srtEspaña.lastPathComponent, srtLatino.lastPathComponent])
+
+probar("abre el .zip y encuentra los dos .srt") {
+    Motor.subtitulos(en: [zipBajado]).count == 2
+}
+
+probar("una carpeta con videos no se toma por subtítulos (es la serie)") {
+    Motor.subtitulos(en: [temporal.appendingPathComponent("serie")]).isEmpty
+}
+
+probar("empareja por capítulo y elige el latino aunque venga el de España") {
+    let e2 = URL(fileURLWithPath: "/x/Show.S01E02.WEB.mkv"), e3 = URL(fileURLWithPath: "/x/Show.S01E03.WEB.mkv")
+    let pares = Motor.emparejar([srtEspaña, srtLatino], con: [e2, e3])
+    return pares.count == 1 && pares[0].video == e2 && pares[0].subtitulo == srtLatino
+}
+
+probar("la búsqueda para Subdivx") {
+    Motor.busquedaSubdivx(para: URL(fileURLWithPath: "/x/Ted.Lasso.S01E02.HDR.2160p.mkv")) == "Ted Lasso S01E02"
+        && Motor.busquedaSubdivx(para: URL(fileURLWithPath: "/x/The.Batman.2022.1080p.WEB-DL.mkv")) == "The Batman"
+}
+
 print("\n▸ Elección de pista")
 
 let latina = Pista(indice: 4, codec: "ass", idioma: "spa", titulo: "Latino", forzada: false, paraSordos: false)
@@ -433,6 +472,28 @@ for _ in 0..<50 {
 await probarEsperando("procesar deja el .srt junto al video") {
     let destino = Motor.destinoSRT(de: videoDePrueba)
     return FileManager.default.fileExists(atPath: destino.path) && TextoSRT.estaBienFormado(destino)
+}
+
+// Lo que pidió el usuario: si sólo hay español de España, avisar; y al soltar
+// el latino bajado de Subdivx, que quede puesto.
+await MainActor.run { cola.agregar([srtEspaña]) }
+for _ in 0..<50 {
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    if await MainActor.run(body: { cola.filas.first?.avisa == true }) { break }
+}
+await probarEsperando("soltar el de España deja la fila en aviso") {
+    await MainActor.run { cola.filas.first?.avisa == true }
+}
+
+await MainActor.run { cola.agregar([zipBajado]) }
+for _ in 0..<50 {
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    if await MainActor.run(body: { cola.filas.first?.terminada == true }) { break }
+}
+await probarEsperando("soltar el .zip de Subdivx instala el latino y quita el aviso") {
+    let bien = await MainActor.run { cola.filas.first?.terminada == true }
+    let texto = (try? TextoSRT.leer(Motor.destinoSRT(de: videoDePrueba)).texto) ?? ""
+    return bien && texto.contains("ustedes") && TextoSRT.estaBienFormado(Motor.destinoSRT(de: videoDePrueba))
 }
 
 print("\n\(pasadas) pasadas, \(falladas) falladas\n")

@@ -61,6 +61,10 @@ public struct Fila: Identifiable, Equatable {
     }
 
     var nombre: String { url.lastPathComponent }
+
+    /// Quedó en naranja: sin subtítulo, o sólo con el de España.
+    public var avisa: Bool { if case .avisada = estado { return true } else { return false } }
+    public var terminada: Bool { if case .hecha = estado { return true } else { return false } }
 }
 
 @MainActor
@@ -71,6 +75,8 @@ public final class Cola: ObservableObject {
     @Published public var preferirLatino = true
     @Published public var organizar = false
     @Published public var mensajeDeHerramientas: String?
+    /// Aviso pasajero en la barra inferior (p. ej. un subtítulo sin dueño).
+    @Published public var aviso: String?
 
     public init() {
         let faltan = Herramientas.faltantes
@@ -80,6 +86,11 @@ public final class Cola: ObservableObject {
     }
 
     public func agregar(_ rutas: [URL]) {
+        // Un .srt/.zip/.rar bajado a mano (Subdivx) no es una película: se le
+        // busca dueño entre las de la lista. Una carpeta con videos es una serie.
+        let subtitulos = Motor.subtitulos(en: rutas)
+        if !subtitulos.isEmpty { adoptar(subtitulos) }
+
         let nuevas = Motor.videos(en: rutas)
             .filter { url in !filas.contains { $0.url == url } }
             .map(Fila.init)
@@ -109,6 +120,63 @@ public final class Cola: ObservableObject {
         cambiar(id) { $0.pistaElegida = indice }
     }
 
+    private func adoptar(_ subtitulos: [URL]) {
+        // Primero los que avisaron que les falta; si ninguno casa, cualquiera.
+        let avisadas = filas.filter { if case .avisada = $0.estado { return true } else { return false } }
+        var pares = Motor.emparejar(subtitulos, con: avisadas.map(\.url))
+        if pares.isEmpty { pares = Motor.emparejar(subtitulos, con: filas.map(\.url)) }
+
+        guard !pares.isEmpty else {
+            let nombre = subtitulos.first?.lastPathComponent ?? "el subtítulo"
+            aviso = filas.isEmpty
+                ? "Arrastra primero la película o el capítulo, y luego su subtítulo."
+                : "No supe a qué capítulo o película corresponde «\(nombre)»."
+            return
+        }
+        aviso = nil
+        let organizarlos = organizar
+        let latino = preferirLatino
+
+        for par in pares {
+            guard let fila = filas.first(where: { $0.url == par.video }) else { continue }
+            let id = fila.id
+            let esEpisodio = fila.diagnostico?.esEpisodio ?? (Motor.carpetaDeCapitulo(para: fila.url) != nil)
+            cambiar(id) { $0.estado = .procesando }
+            Task.detached(priority: .userInitiated) {
+                let resultado = Motor.adoptar(par.subtitulo, para: par.video)
+                let final = await self.ordenar(id, par.video, resultado, esEpisodio: esEpisodio,
+                                               organizar: organizarlos, preferirLatino: latino)
+                await MainActor.run {
+                    self.cambiar(id) { $0.estado = final }
+                    Motor.limpiarFantasmas(en: [self.filas.first { $0.id == id }?.url.deletingLastPathComponent()
+                                                ?? par.video.deletingLastPathComponent()])
+                }
+            }
+        }
+    }
+
+    /// Traduce el resultado y, si corresponde, mete el capítulo en su carpeta.
+    private func ordenar(_ id: UUID, _ video: URL, _ resultado: Motor.Resultado, esEpisodio: Bool,
+                         organizar: Bool, preferirLatino: Bool) -> Fila.Estado {
+        var estado = Self.traducir(resultado, preferirLatino: preferirLatino)
+        // Sólo se mueve lo que quedó con subtítulo: lo que falló se queda
+        // a la vista, donde estaba.
+        guard organizar, resultado.fueBien, esEpisodio else { return estado }
+        do {
+            let nueva = try Motor.organizarPorCapitulo(video)
+            cambiar(id) { $0.url = nueva }
+            let carpeta = " · en «\(nueva.deletingLastPathComponent().lastPathComponent)»"
+            switch estado {
+            case .hecha(let texto): estado = .hecha(texto + carpeta)
+            case .avisada(let texto): estado = .avisada(texto + carpeta)
+            default: break
+            }
+        } catch {
+            estado = .avisada("subtítulo listo, pero \(error.localizedDescription)")
+        }
+        return estado
+    }
+
     public func vaciar() {
         filas.removeAll()
     }
@@ -124,7 +192,6 @@ public final class Cola: ObservableObject {
         let red = usarRed
         let latino = preferirLatino
         let organizarlos = organizar
-        var carpetas = Set(porHacer.map { $0.url.deletingLastPathComponent() })
 
         Task {
             for fila in porHacer {
@@ -133,45 +200,42 @@ public final class Cola: ObservableObject {
                                               pistaPreferida: fila.pistaElegida,
                                               preferirLatino: latino)
                 let resultado = await Motor.procesar(fila.url, opciones: opciones)
-                var estado = Self.traducir(resultado)
-
-                // Sólo se mueve lo que quedó con subtítulo: lo que falló se queda
-                // a la vista, donde estaba.
-                if organizarlos, resultado.fueBien, fila.diagnostico?.esEpisodio == true {
-                    do {
-                        let nueva = try Motor.organizarPorCapitulo(fila.url)
-                        carpetas.insert(nueva.deletingLastPathComponent())
-                        cambiar(fila.id) { $0.url = nueva }
-                        if case .hecha(let texto) = estado {
-                            estado = .hecha(texto + " · en «\(nueva.deletingLastPathComponent().lastPathComponent)»")
-                        }
-                    } catch {
-                        estado = .avisada("subtítulo listo, pero \(error.localizedDescription)")
-                    }
-                }
+                let estado = ordenar(fila.id, fila.url, resultado,
+                                     esEpisodio: fila.diagnostico?.esEpisodio == true,
+                                     organizar: organizarlos, preferirLatino: latino)
                 cambiar(fila.id) { $0.estado = estado }
             }
+            let carpetas = Set(porHacer.compactMap { hecha in
+                filas.first { $0.id == hecha.id }?.url.deletingLastPathComponent()
+            } + porHacer.map { $0.url.deletingLastPathComponent() })
             Motor.limpiarFantasmas(en: carpetas)
             trabajando = false
         }
     }
 
-    static func traducir(_ resultado: Motor.Resultado) -> Fila.Estado {
+    static let pedirSubdivx = "búscalo en Subdivx y arrastra aquí lo que bajes"
+
+    static func traducir(_ resultado: Motor.Resultado, preferirLatino: Bool = true) -> Fila.Estado {
         switch resultado {
-        case .listo(let origen, let lineas, let publicidad, let etiquetas, let depurados):
+        case .listo(let origen, let lineas, let publicidad, let etiquetas, let depurados, let deEspaña):
+            if preferirLatino, deEspaña {
+                return .avisada("no conseguí latino: dejé el de España (\(origen)) · \(pedirSubdivx)")
+            }
             var texto = "\(lineas) líneas · \(origen)"
             if publicidad > 0 { texto += " · \(publicidad) bloque(s) de publicidad fuera" }
             if etiquetas > 0 { texto += " · \(etiquetas) línea(s) con etiquetas de formato limpiadas" }
             if depurados > 0 { texto += " · \(depurados) línea(s) con caracteres basura depuradas" }
             return .hecha(texto)
-        case .reparado(let codificacion):
+        case .reparado(_, true) where preferirLatino, .yaEstaba(true) where preferirLatino:
+            return .avisada("el .srt que tiene es de España · \(pedirSubdivx)")
+        case .reparado(let codificacion, _):
             return .hecha("el .srt que ya estaba venía en \(codificacion) — corregido")
         case .yaEstaba:
             return .hecha("ya tenía subtítulo correcto")
         case .sinSubtitulos(let soloImagen):
             return .avisada(soloImagen
-                ? "sólo trae subtítulos de imagen y no hay nada en OpenSubtitles — haría falta OCR"
-                : "no se encontró ningún subtítulo en español")
+                ? "sólo trae subtítulos de imagen y no hay nada en internet · \(pedirSubdivx)"
+                : "no encontré ningún subtítulo en español · \(pedirSubdivx)")
         case .falló(let motivo):
             return .fallada(motivo)
         }

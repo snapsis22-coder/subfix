@@ -51,6 +51,11 @@ public enum Herramientas {
         let proceso = Process()
         proceso.executableURL = URL(fileURLWithPath: ejecutable)
         proceso.arguments = argumentos
+        // Una app abierta desde el Finder no hereda idioma: sin él, bsdtar no sabe
+        // escribir nombres con tildes y falla con «Illegal byte sequence».
+        var entorno = ProcessInfo.processInfo.environment
+        entorno["LC_ALL"] = "en_US.UTF-8"
+        proceso.environment = entorno
 
         let tuboSalida = Pipe(), tuboError = Pipe()
         proceso.standardOutput = tuboSalida

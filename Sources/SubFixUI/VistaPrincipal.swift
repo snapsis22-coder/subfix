@@ -1,3 +1,4 @@
+import AppKit
 import SubFixKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -69,6 +70,16 @@ struct VistaPeliculas: View {
                 .listStyle(.inset)
             }
 
+            if let aviso = cola.aviso {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(aviso).font(.callout)
+                    Spacer()
+                    Button("Cerrar") { cola.aviso = nil }.buttonStyle(.borderless)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(.orange.opacity(0.08))
+            }
             Divider()
             barraInferior
         }
@@ -85,11 +96,10 @@ struct VistaPeliculas: View {
                 .toggleStyle(.checkbox)
                 .help("Cuando la película no trae subtítulo de texto, se busca uno en internet")
 
-            Toggle("Series en latino", isOn: $cola.preferirLatino)
+            Toggle("Preferir latino", isOn: $cola.preferirLatino)
                 .toggleStyle(.checkbox)
-                .disabled(!cola.usarRed)
-                .help("En los capítulos de series se busca primero el español latino en Addic7ed; "
-                      + "la pista que traen embebida suele ser la de España")
+                .help("En las series se busca primero el latino en Addic7ed. Si al final sólo hay "
+                      + "español de España o nada, la fila avisa en naranja para buscarlo en Subdivx")
 
             Toggle("Carpeta por capítulo", isOn: $cola.organizar)
                 .toggleStyle(.checkbox)
@@ -133,7 +143,8 @@ struct ZonaVacia: View {
                 .foregroundStyle(encima ? Color.accentColor : .secondary)
             Text("Arrastra películas o una carpeta")
                 .font(.title3)
-            Text("Deja el .srt listo para el Samsung: mismo nombre, UTF-8 con BOM y CRLF")
+            Text("Deja el .srt listo para el Samsung: mismo nombre, UTF-8 con BOM y CRLF.\n"
+                 + "También acepta el .zip, .rar o .srt que bajes de Subdivx.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -175,12 +186,31 @@ struct FilaDePelicula: View {
 
             Spacer()
 
+            if case .avisada = fila.estado {
+                Button {
+                    buscarEnSubdivx()
+                } label: {
+                    Label("Subdivx", systemImage: "magnifyingglass")
+                }
+                .help("Abre Subdivx y copia «\(Motor.busquedaSubdivx(para: fila.url))» para pegarla en el buscador. "
+                      + "Luego arrastra aquí lo que bajes")
+            }
+
             if let diagnostico = fila.diagnostico, diagnostico.pistas.filter(\.esTexto).count > 1,
                fila.estado == .listaParaProcesar {
                 selectorDePista(diagnostico)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Subdivx no deja que un programa busque por su cuenta (Cloudflare), así que
+    /// la búsqueda la hace el usuario: se le deja copiada y se abre la página.
+    private func buscarEnSubdivx() {
+        let tablero = NSPasteboard.general
+        tablero.clearContents()
+        tablero.setString(Motor.busquedaSubdivx(para: fila.url), forType: .string)
+        NSWorkspace.shared.open(URL(string: "https://www.subdivx.com/")!)
     }
 
     /// Cuando hay varias pistas de texto se puede cambiar la elegida: es la

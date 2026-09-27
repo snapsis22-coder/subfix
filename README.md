@@ -32,7 +32,11 @@ Para cada película busca subtítulo en español en tres niveles y se queda con 
 2. **Archivo `.srt` o `.ass` suelto** de la carpeta o de un subdirectorio `Subs/`, corrigiéndole la codificación. Un suelto que no lleve el nombre del vídeo solo se adopta si es la única película de la carpeta: con varias juntas, adivinar significa ponerle a una los diálogos de otra.
 3. **OpenSubtitles** — primero por *hash* del archivo, que identifica tu versión exacta y llega sincronizado; si no aparece, por título, avisando de que conviene revisar la sincronía.
 
-**Series en latino.** Los capítulos de series (los que llevan `S01E01` en el nombre) suelen traer incrustado solo el español de España. Con la casilla *Series en latino* activada, antes que la pista incrustada se busca el español latino en **Addic7ed**, eligiendo la versión que más se parece al nombre de tu archivo, que es la que va sincronizada. Si no hay latino, se usa la pista incrustada. Si eliges una pista a mano, manda tu elección.
+**Preferir latino.** Los capítulos de series (los que llevan `S01E01` en el nombre) suelen traer incrustado solo el español de España. Con la casilla *Preferir latino* activada, antes que la pista incrustada se busca el español latino en **Addic7ed**, eligiendo la versión que más se parece al nombre de tu archivo, que es la que va sincronizada. Lo que se descarga se comprueba: si en realidad está en inglés (a veces lo suben mal etiquetado), se descarta.
+
+**Avisa cuando no hay latino.** SubFix reconoce el español de España por el *vosotros* («sois», «os», «tenéis»). Si una película o capítulo se queda solo con ese, o sin nada, la fila se pone en naranja y aparece el botón **Subdivx**: abre la página y deja copiada la búsqueda («Ted Lasso S01E02») para pegarla. Mientras tanto se deja puesto el de España, que es mejor que nada. La vigilancia de carpeta avisa lo mismo con una notificación.
+
+**Arrastra lo que bajes de Subdivx.** El `.zip`, `.rar` o `.srt` se suelta en la ventana: SubFix lo abre (también los `.zip` con nombres en la codificación vieja de DOS, tan comunes en Subdivx), empareja cada subtítulo con su capítulo por el `S01E02`, elige el latino si vienen los dos, lo limpia, lo deja con el nombre del video y lo mete en su carpeta.
 
 Además:
 
@@ -81,7 +85,7 @@ Como no entra x264 ni x265, lo que se empaqueta es **LGPL 2.1** y no GPL. La lic
 ## Estructura
 
 ```
-Sources/SubFixKit   motor: sondeo, extracción, formato para el TV, OpenSubtitles, Addic7ed
+Sources/SubFixKit   motor: sondeo, extracción, formato para el TV, OpenSubtitles, Addic7ed, subtítulos bajados a mano
 Sources/SubFixUI    las vistas
 Sources/SubFix      el ejecutable, que solo abre la ventana
 Sources/subfixtests pruebas, con arnés propio

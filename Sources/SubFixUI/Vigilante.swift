@@ -94,10 +94,16 @@ public final class Vigilante: ObservableObject {
         historial.insert(Anotacion(nombre: video.lastPathComponent,
                                    cuando: Date(),
                                    texto: texto,
-                                   bien: resultado.fueBien),
+                                   bien: { if case .hecha = estado { return true } else { return false } }()),
                          at: 0)
         if historial.count > 50 { historial.removeLast() }
-        if resultado.fueBien { avisar(video.lastPathComponent) }
+        // También cuando falta: es justo lo que hay que ir a buscar a Subdivx.
+        switch estado {
+        case .hecha: avisar("Subtítulos listos", video.lastPathComponent)
+        case .avisada(let motivo):
+            avisar("Falta el subtítulo latino", "\(Motor.busquedaSubdivx(para: video)): \(motivo)")
+        default: break
+        }
     }
 
     // MARK: - Avisos del sistema
@@ -106,10 +112,10 @@ public final class Vigilante: ObservableObject {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    private func avisar(_ nombre: String) {
+    private func avisar(_ titulo: String, _ cuerpo: String) {
         let contenido = UNMutableNotificationContent()
-        contenido.title = "Subtítulos listos"
-        contenido.body = nombre
+        contenido.title = titulo
+        contenido.body = cuerpo
         contenido.sound = .default
         let peticion = UNNotificationRequest(identifier: UUID().uuidString,
                                              content: contenido, trigger: nil)

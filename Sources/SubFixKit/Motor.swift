@@ -74,9 +74,9 @@ public enum Motor {
 
     public enum Resultado: Sendable {
         case listo(origen: String, lineas: Int, publicidadQuitada: Int, etiquetasLimpiadas: Int,
-                   caracteresDepurados: Int)
-        case reparado(codificacionAnterior: String)
-        case yaEstaba
+                   caracteresDepurados: Int, deEspaña: Bool)
+        case reparado(codificacionAnterior: String, deEspaña: Bool)
+        case yaEstaba(deEspaña: Bool)
         case sinSubtitulos(soloImagen: Bool)
         case falló(String)
 
@@ -111,12 +111,15 @@ public enum Motor {
         // Existir no basta: los .srt que vienen con el torrent suelen estar en
         // Latin-1 y sin CRLF, que es justo lo que el TV pinta como basura.
         if FileManager.default.fileExists(atPath: destino.path), !opciones.forzar {
-            if TextoSRT.estaBienFormado(destino) { return .yaEstaba }
+            if TextoSRT.estaBienFormado(destino) {
+                let texto = (try? TextoSRT.leer(destino).texto) ?? ""
+                return .yaEstaba(deEspaña: TextoSRT.pareceDeEspaña(texto))
+            }
             do {
                 let (texto, codificacion) = try TextoSRT.leer(destino)
                 try TextoSRT.apartar(destino)
                 try TextoSRT.escribirParaElTV(TextoSRT.depurarCaracteres(texto).texto, en: destino)
-                return .reparado(codificacionAnterior: codificacion)
+                return .reparado(codificacionAnterior: codificacion, deEspaña: TextoSRT.pareceDeEspaña(texto))
             } catch {
                 return .falló(error.localizedDescription)
             }
@@ -168,6 +171,12 @@ public enum Motor {
             return .sinSubtitulos(soloImagen: !diagnostico.pistasDeImagen.isEmpty)
         }
 
+        return instalar(texto, origen: origen, en: destino)
+    }
+
+    /// Limpia el texto y lo deja junto al video con el formato que el TV entiende.
+    /// Lo que hubiera antes se aparta como «.anterior», nunca se pisa.
+    private static func instalar(_ texto: String, origen: String, en destino: URL) -> Resultado {
         let sinEtiquetas = TextoSRT.quitarEtiquetasASS(texto)
         let depurado = TextoSRT.depurarCaracteres(sinEtiquetas.texto)
         let limpio = TextoSRT.quitarPublicidad(depurado.texto)
@@ -181,7 +190,112 @@ public enum Motor {
         }
         let lineas = limpio.texto.components(separatedBy: "\n").count
         return .listo(origen: origen, lineas: lineas, publicidadQuitada: limpio.quitados,
-                      etiquetasLimpiadas: sinEtiquetas.tocadas, caracteresDepurados: depurado.tocadas)
+                      etiquetasLimpiadas: sinEtiquetas.tocadas, caracteresDepurados: depurado.tocadas,
+                      deEspaña: TextoSRT.pareceDeEspaña(limpio.texto))
+    }
+
+    // MARK: - Subtítulos traídos a mano (Subdivx)
+
+    /// Instala un .srt que el usuario bajó por su cuenta. Lo pidió él, así que
+    /// reemplaza lo que hubiera (apartándolo).
+    public static func adoptar(_ subtitulo: URL, para video: URL) -> Resultado {
+        do {
+            let (texto, codificacion) = try TextoSRT.leer(subtitulo)
+            return instalar(texto, origen: "\(subtitulo.lastPathComponent) (\(codificacion))",
+                            en: destinoSRT(de: video))
+        } catch {
+            return .falló(error.localizedDescription)
+        }
+    }
+
+    static let extensionesDeArchivo: Set<String> = ["zip", "rar", "7z"]
+
+    /// Los .srt que hay en lo que se soltó: sueltos, dentro de un .zip/.rar (se
+    /// abre con el bsdtar del sistema, que lee RAR) o en una carpeta SIN videos,
+    /// como la que deja el Finder al descomprimir. Una carpeta con videos es la
+    /// de la serie, y sus .srt son los que ya están puestos.
+    public static func subtitulos(en rutas: [URL]) -> [URL] {
+        let gestor = FileManager.default
+        var encontrados: [URL] = []
+
+        func srtsDentro(de carpeta: URL) -> [URL] {
+            let enumerador = gestor.enumerator(at: carpeta, includingPropertiesForKeys: nil,
+                                               options: [.skipsHiddenFiles])
+            var srts: [URL] = []
+            while let elemento = enumerador?.nextObject() as? URL {
+                if elemento.pathExtension.lowercased() == "srt", !elemento.lastPathComponent.hasPrefix("._") {
+                    srts.append(elemento)
+                }
+            }
+            return srts
+        }
+
+        for ruta in rutas {
+            var esCarpeta: ObjCBool = false
+            guard gestor.fileExists(atPath: ruta.path, isDirectory: &esCarpeta) else { continue }
+            let ext = ruta.pathExtension.lowercased()
+            if esCarpeta.boolValue {
+                if videos(en: [ruta]).isEmpty { encontrados += srtsDentro(de: ruta) }
+            } else if ext == "srt" {
+                encontrados.append(ruta)
+            } else if extensionesDeArchivo.contains(ext) {
+                // Los .zip de Subdivx guardan los nombres en la página de códigos de DOS
+                // («Espa\u{A4}ol»): APFS los rechaza como UTF-8 inválido y no sale nada.
+                // Si el intento normal falla, se repite leyéndolos como CP850.
+                for opciones in [[], ["--options", "hdrcharset=CP850"]] {
+                    let temporal = gestor.temporaryDirectory.appendingPathComponent("subfix-\(UUID().uuidString)")
+                    guard (try? gestor.createDirectory(at: temporal, withIntermediateDirectories: true)) != nil,
+                          let salida = try? Herramientas.correr("bsdtar", opciones + ["-xf", ruta.path, "-C", temporal.path])
+                    else { continue }
+                    let srts = srtsDentro(de: temporal)
+                    if salida.codigo == 0, !srts.isEmpty { encontrados += srts; break }
+                }
+            }
+        }
+        return encontrados
+    }
+
+    /// A cada video, el subtítulo que le corresponde. Un capítulo se empareja por
+    /// SxxEyy; si sólo hay un video en juego, se lleva lo que haya. Entre varios
+    /// candidatos (Subdivx suele traer el de España y el latino juntos) gana el
+    /// que no tiene vosotros y, a igualdad, el que dice «latin» en el nombre.
+    public static func emparejar(_ subtitulos: [URL], con videos: [URL]) -> [(video: URL, subtitulo: URL)] {
+        func codigo(_ url: URL) -> String? {
+            let (_, t, e) = OpenSubtitles.tituloLimpio(url)
+            guard let t, let e else { return nil }
+            return "\(t)x\(e)"
+        }
+        func puntaje(_ srt: URL) -> Int {
+            let texto = (try? TextoSRT.leer(srt).texto) ?? ""
+            var n = 0
+            if !TextoSRT.pareceDeEspaña(texto) { n += 10 }
+            if TextoSRT.pareceEspañol(texto) { n += 5 }
+            if srt.lastPathComponent.range(of: "latin", options: .caseInsensitive) != nil { n += 2 }
+            return n
+        }
+
+        var pares: [(video: URL, subtitulo: URL)] = []
+        for video in videos {
+            let candidatos: [URL]
+            if let suyo = codigo(video) {
+                let mismos = subtitulos.filter { codigo($0) == suyo }
+                candidatos = mismos.isEmpty && videos.count == 1 ? subtitulos : mismos
+            } else {
+                candidatos = videos.count == 1 ? subtitulos : []
+            }
+            if let mejor = candidatos.max(by: { puntaje($0) < puntaje($1) }) {
+                pares.append((video, mejor))
+            }
+        }
+        return pares
+    }
+
+    /// Lo que conviene escribir en el buscador de Subdivx: «Ted Lasso S01E02»
+    /// para un capítulo, el título para una película.
+    public static func busquedaSubdivx(para video: URL) -> String {
+        if let capitulo = carpetaDeCapitulo(para: video) { return capitulo }
+        return OpenSubtitles.tituloLimpio(video).titulo.split(separator: " ")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 
     // MARK: - Archivos

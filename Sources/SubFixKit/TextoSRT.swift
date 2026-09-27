@@ -150,6 +150,17 @@ public enum TextoSRT {
         return es > 2 * en
     }
 
+    /// El castellano de España se delata por el vosotros: «sois», «os», «tenéis»,
+    /// «vuestro». En los subtítulos latinos de Ted Lasso sale 0 veces; en los de
+    /// España, de 16 a 23. «Dieciséis» y «veintiséis» terminan igual y no cuentan.
+    static let rasgosDeEspaña = try! NSRegularExpression(
+        pattern: "\\b(?!(?:dieci|veinti)séis\\b)(vosotros|vosotras|vuestr[oa]s?|sois|os|\\p{L}+(?:áis|éis))\\b",
+        options: [.caseInsensitive])
+
+    public static func pareceDeEspaña(_ texto: String) -> Bool {
+        rasgosDeEspaña.numberOfMatches(in: texto, range: NSRange(texto.startIndex..., in: texto)) >= 5
+    }
+
     // MARK: - Caracteres basura
 
     /// Lo que el Tizen imprime tal cual o como cuadritos, más allá de la codificación:
