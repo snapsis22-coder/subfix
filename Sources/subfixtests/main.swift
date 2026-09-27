@@ -235,6 +235,14 @@ probar("un bloque que era sólo etiquetas desaparece y se renumera") {
     return limpio.hasPrefix("1\n00:00:03") && limpio.contains("Hola.")
 }
 
+probar("reconoce inglés disfrazado de español, y el español de los dos lados") {
+    let ingles = String(repeating: "- Morning, Coach. You wanna grab some breakfast? Nah, I just had one piece of cereal and I'm pretty stuffed.\n", count: 15)
+    let latino = String(repeating: "Rupert y yo lo compramos en nuestro quinto aniversario. ¿Qué es eso? Que ustedes llaman futbol a ningún nivel.\n", count: 15)
+    let españa = String(repeating: "¿Quiénes sois? Os presento: es Higgins. Cualquier cosa con café vale, parece un tío divertido.\n", count: 15)
+    return !TextoSRT.pareceEspañol(ingles) && TextoSRT.pareceEspañol(latino) && TextoSRT.pareceEspañol(españa)
+        && TextoSRT.pareceEspañol("1\n00:00:01,000 --> 00:00:02,000\nOK.")     // poco texto: no se juzga
+}
+
 print("\n▸ Elección de pista")
 
 let latina = Pista(indice: 4, codec: "ass", idioma: "spa", titulo: "Latino", forzada: false, paraSordos: false)

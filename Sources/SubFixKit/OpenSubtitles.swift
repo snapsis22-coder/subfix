@@ -122,7 +122,8 @@ public enum OpenSubtitles {
                 let nombreSub = (mejor.SubFileName ?? "").lowercased()
                 guard palabrasDelTitulo.contains(where: { nombreSub.contains($0) }) else { continue }
             }
-            guard let enlace = mejor.SubDownloadLink, let texto = try? await descargar(enlace) else { continue }
+            guard let enlace = mejor.SubDownloadLink, let texto = try? await descargar(enlace),
+                  TextoSRT.pareceEspañol(texto) else { continue }
             return Hallazgo(texto: texto,
                             nombreDelArchivo: mejor.SubFileName ?? "subtítulo",
                             porHash: intento.porHash)
