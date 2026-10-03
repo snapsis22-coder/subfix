@@ -81,7 +81,7 @@ public enum Addic7ed {
 
         for version in candidatas {
             guard let texto = try? await pedir(base + version.enlace, referer: pagina),
-                  texto.contains("-->"),      // al pasar el cupo diario llega una página HTML
+                  TextoSRT.esSRT(texto),      // al pasar el cupo diario llega una página HTML
                   TextoSRT.pareceEspañol(texto)  // la etiqueta del sitio la pone quien sube
             else { continue }
             return Hallazgo(texto: texto, version: version.nombre)
