@@ -396,6 +396,12 @@ probar("nombre de la carpeta del capítulo") {
         && Motor.carpetaDeCapitulo(para: URL(fileURLWithPath: "/x/The.Batman.2022.1080p.mkv")) == nil
 }
 
+probar("esSRT rechaza una página HTML con «-->» y acepta un .srt real") {
+    let html = "\u{FEFF}<body>\r\n<!-- cupo diario -->\r\n<center>Has superado el límite de descargas</center></body>"
+    let srt = (1...6).map { "\($0)\n00:00:0\($0),000 --> 00:00:0\($0),900\nHola \($0)\n" }.joined(separator: "\n")
+    return !TextoSRT.esSRT(html) && TextoSRT.esSRT(srt) && !TextoSRT.esSRT("")
+}
+
 probar("organizar mete el capítulo y su .srt en su carpeta, y no toca a los demás") {
     let serie = temporal.appendingPathComponent("serie", isDirectory: true)
     try FileManager.default.createDirectory(at: serie, withIntermediateDirectories: true)

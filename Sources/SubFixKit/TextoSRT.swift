@@ -139,6 +139,18 @@ public enum TextoSRT {
         "don't", "i'm", "it's", "for", "your", "have", "just", "be", "are", "with",
     ]
 
+    /// ¿Es de verdad un .srt? Una página HTML (cupo diario de Addic7ed) también trae
+    /// «-->» en sus comentarios, así que se exigen líneas de tiempo reales.
+    public static func esSRT(_ texto: String) -> Bool {
+        let regex = try! NSRegularExpression(
+            pattern: "^\\s*\\d{1,2}:\\d{2}:\\d{2}[,.]\\d{1,3}\\s*-->\\s*\\d{1,2}:\\d{2}:\\d{2}[,.]\\d{1,3}",
+            options: [.anchorsMatchLines])
+        let n = regex.numberOfMatches(in: texto, range: NSRange(texto.startIndex..., in: texto))
+        let pareceHTML = texto.range(of: "<html", options: .caseInsensitive) != nil
+            || texto.range(of: "<body", options: .caseInsensitive) != nil
+        return n >= 5 && !pareceHTML
+    }
+
     public static func pareceEspañol(_ texto: String) -> Bool {
         let palabras = texto.lowercased()
             .components(separatedBy: CharacterSet.letters.union(CharacterSet(charactersIn: "'")).inverted)
