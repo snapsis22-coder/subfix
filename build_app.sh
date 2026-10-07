@@ -21,6 +21,8 @@ mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cp "$PROYECTO/Info.plist" "$BUNDLE/Contents/Info.plist"
 cp "$PROYECTO/.build/release/$PRODUCTO" "$BUNDLE/Contents/MacOS/$NOMBRE_APP"
 [ -f "$PROYECTO/Resources/AppIcon.icns" ] && cp "$PROYECTO/Resources/AppIcon.icns" "$BUNDLE/Contents/Resources/"
+# Sin una carpeta «es.lproj» macOS pinta los menús estándar (Archivo, Edición, Ventana…) en inglés.
+cp -R "$PROYECTO/Resources/es.lproj" "$BUNDLE/Contents/Resources/"
 
 # ffmpeg y ffprobe propios (ver herramientas/compilar_ffmpeg.sh). Sin esto la app
 # depende de que la Mac tenga Homebrew.

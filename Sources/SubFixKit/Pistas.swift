@@ -29,6 +29,8 @@ public struct Pista: Identifiable, Hashable, Sendable {
     public var esTexto: Bool { Self.deTexto.contains(codec) }
     public var esImagen: Bool { Self.deImagen.contains(codec) }
 
+    public var sinIdioma: Bool { Idioma.estaSinEspecificar(idioma) }
+
     public var esEspañol: Bool {
         let campos = "\(idioma ?? "") \(titulo ?? "")".lowercased()
         return ["spa", "es", "esp", "spanish", "castellano", "lat"].contains { termino in
@@ -149,6 +151,8 @@ public struct PistaDeAudio: Identifiable, Hashable, Sendable {
         self.canales = canales
     }
 
+    public var sinIdioma: Bool { Idioma.estaSinEspecificar(idioma) }
+
     public var esIngles: Bool {
         let campos = "\(idioma ?? "") \(titulo ?? "")".lowercased()
         return ["eng", "en", "english", "inglés", "ingles"].contains { termino in
@@ -190,5 +194,15 @@ extension Sondeo {
             PistaDeAudio(indice: $0.index, codec: $0.codec_name ?? "desconocido",
                          idioma: $0.tags?["language"], titulo: $0.tags?["title"], canales: $0.channels)
         }
+    }
+}
+
+extension Sondeo {
+    /// Duración total en segundos, o nil si el archivo no la declara.
+    public static func duracion(de url: URL) -> Double? {
+        guard let salida = try? Herramientas.correr("ffprobe", ["-v", "error", "-show_entries", "format=duration",
+                                                              "-of", "csv=p=0", url.path]),
+              salida.codigo == 0 else { return nil }
+        return Double(salida.texto.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

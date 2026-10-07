@@ -15,6 +15,13 @@ public struct Fila: Identifiable, Equatable {
     public internal(set) var diagnostico: Motor.Diagnostico?
     var estado: Estado = .analizando
     var pistaElegida: Int?
+    /// Si el usuario armó un MKV a medida, «Procesar» lo crea en vez de extraer el .srt.
+    var plan: PlanDeMKV?
+    /// Avance del MKV que se está creando (0…1) y cuándo empezó, para la barra y el tiempo restante.
+    var progreso: Double?
+    /// Lo que se creó al terminar (el MKV nuevo), para el botón «Mostrar».
+    var archivoListo: URL?
+    var inicioDeProgreso: Date?
 
     enum Estado: Equatable {
         case analizando
@@ -57,7 +64,8 @@ public struct Fila: Identifiable, Equatable {
 
     public static func == (izquierda: Fila, derecha: Fila) -> Bool {
         izquierda.id == derecha.id && izquierda.estado == derecha.estado
-            && izquierda.pistaElegida == derecha.pistaElegida
+            && izquierda.pistaElegida == derecha.pistaElegida && izquierda.plan == derecha.plan
+            && izquierda.progreso == derecha.progreso
     }
 
     var nombre: String { url.lastPathComponent }
@@ -177,12 +185,33 @@ public final class Cola: ObservableObject {
         return estado
     }
 
+    /// Se creó un MKV desde la hoja: si la fila seguía pendiente, ya no hay nada
+    /// que procesar (no hace falta dejar un .srt suelto).
+    public func mkvCreado(_ id: UUID, _ mkv: URL) {
+        cambiar(id) { fila in
+            fila.plan = nil
+            fila.archivoListo = mkv
+            if fila.estado == .listaParaProcesar { fila.estado = .hecha("MKV creado: \(mkv.lastPathComponent)") }
+        }
+    }
+
+    /// Deja armado el MKV de una fila: «Procesar» lo creará. Con `nil` se descarta
+    /// y la fila vuelve a extraer el .srt como siempre.
+    public func guardarPlan(_ id: UUID, _ plan: PlanDeMKV?) {
+        cambiar(id) { $0.plan = plan }
+    }
+
     public func vaciar() {
         filas.removeAll()
     }
 
     public var pendientes: [Fila] {
-        filas.filter { $0.estado == .listaParaProcesar }
+        // Una fila que falló al crear su MKV conserva el plan: se puede reintentar sin volver a armarlo.
+        filas.filter { fila in
+            if fila.estado == .listaParaProcesar { return true }
+            if case .fallada = fila.estado, fila.plan != nil { return true }
+            return false
+        }
     }
 
     public func procesarTodo() {
@@ -196,6 +225,22 @@ public final class Cola: ObservableObject {
         Task {
             for fila in porHacer {
                 cambiar(fila.id) { $0.estado = .procesando }
+                if let plan = fila.plan {
+                    let video = fila.url, id = fila.id
+                    cambiar(id) { $0.progreso = 0; $0.inicioDeProgreso = Date() }
+                    do {
+                        let mkv = try await Task.detached(priority: .userInitiated) {
+                            try Remux.hacer(video: video, plan: plan) { avance in
+                                Task { @MainActor [weak self] in self?.cambiar(id) { $0.progreso = avance } }
+                            }
+                        }.value
+                        cambiar(id) { $0.plan = nil; $0.progreso = nil; $0.archivoListo = mkv
+                                      $0.estado = .hecha("MKV creado: \(mkv.lastPathComponent)") }
+                    } catch {
+                        cambiar(id) { $0.progreso = nil; $0.estado = .fallada(error.localizedDescription) }
+                    }
+                    continue
+                }
                 let opciones = Motor.Opciones(usarRed: red, forzar: false,
                                               pistaPreferida: fila.pistaElegida,
                                               preferirLatino: latino)
