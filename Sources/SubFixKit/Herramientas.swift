@@ -13,6 +13,10 @@ public enum Herramientas {
 
     /// Los binarios que viajan dentro del bundle, cuando se corre como app.
     static var carpetaDelBundle: String? {
+        // Las pruebas apuntan aquí al ffmpeg que viaja en la app (SUBFIX_BIN=…/Resources/bin):
+        // probarlas con el de Homebrew ocultó dos fallos del mínimo (tiempos y «pipe»).
+        if let forzada = ProcessInfo.processInfo.environment["SUBFIX_BIN"],
+           FileManager.default.fileExists(atPath: forzada) { return forzada }
         guard let recursos = Bundle.main.resourcePath else { return nil }
         let bin = recursos + "/bin"
         return FileManager.default.fileExists(atPath: bin) ? bin : nil
@@ -71,6 +75,69 @@ public enum Herramientas {
         return Salida(codigo: proceso.terminationStatus,
                       texto: String(data: datos, encoding: .utf8) ?? "",
                       error: String(data: errores, encoding: .utf8) ?? "")
+    }
+}
+
+extension Herramientas {
+
+    /// Guarda lo que llega a pedazos desde otro hilo y entrega las líneas completas.
+    private final class Acumulador: @unchecked Sendable {
+        private let candado = NSLock()
+        private var resto = Data()
+        private(set) var todo = Data()
+
+        func recibir(_ datos: Data, lineas: (String) -> Void) {
+            candado.lock()
+            todo.append(datos)
+            resto.append(datos)
+            var listas: [String] = []
+            while let corte = resto.firstIndex(of: 0x0A) {
+                listas.append(String(decoding: resto[resto.startIndex..<corte], as: UTF8.self))
+                resto.removeSubrange(resto.startIndex...corte)
+            }
+            candado.unlock()
+            for linea in listas { lineas(linea) }
+        }
+
+        var texto: String { candado.lock(); defer { candado.unlock() }; return String(decoding: todo, as: UTF8.self) }
+    }
+
+    /// Como `correr`, pero entrega cada línea de la salida estándar apenas se escribe
+    /// (para leer el `-progress` de ffmpeg mientras trabaja, no al final).
+    @discardableResult
+    public static func correr(_ orden: String, _ argumentos: [String],
+                              alRecibirLinea: @escaping @Sendable (String) -> Void) throws -> Salida {
+        guard let ejecutable = ruta(de: orden) else { throw ErrorDeSubFix.faltaHerramienta(orden) }
+        let proceso = Process()
+        proceso.executableURL = URL(fileURLWithPath: ejecutable)
+        proceso.arguments = argumentos
+        var entorno = ProcessInfo.processInfo.environment
+        entorno["LC_ALL"] = "en_US.UTF-8"
+        proceso.environment = entorno
+
+        let tuboSalida = Pipe(), tuboError = Pipe()
+        proceso.standardOutput = tuboSalida
+        proceso.standardError = tuboError
+        let salida = Acumulador(), errores = Acumulador()
+        let fin = DispatchGroup()
+
+        for (tubo, acumulador, lineas) in [(tuboSalida, salida, alRecibirLinea),
+                                           (tuboError, errores, { (_: String) in })] {
+            fin.enter()
+            tubo.fileHandleForReading.readabilityHandler = { manejador in
+                let datos = manejador.availableData
+                if datos.isEmpty {
+                    manejador.readabilityHandler = nil
+                    fin.leave()
+                } else {
+                    acumulador.recibir(datos, lineas: lineas)
+                }
+            }
+        }
+        try proceso.run()
+        proceso.waitUntilExit()
+        fin.wait()
+        return Salida(codigo: proceso.terminationStatus, texto: salida.texto, error: errores.texto)
     }
 }
 

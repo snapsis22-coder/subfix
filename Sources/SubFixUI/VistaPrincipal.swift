@@ -90,7 +90,10 @@ struct VistaPeliculas: View {
         } isTargeted: { encima = $0 }
         .animation(.easeInOut(duration: 0.15), value: encima)
         .sheet(item: $paraMKV) { fila in
-            HojaDeMKV(video: fila.url)
+            HojaDeMKV(video: fila.url, planActual: fila.plan,
+                      pendiente: fila.estado == .listaParaProcesar || fila.plan != nil,
+                      alGuardar: { cola.guardarPlan(fila.id, $0) },
+                      alCrear: { cola.mkvCreado(fila.id, $0) })
         }
     }
 
@@ -195,15 +198,25 @@ struct FilaDePelicula: View {
                 .symbolEffect(.pulse, isActive: fila.estado == .procesando)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(fila.nombre)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(fila.url.path)
+                HStack(spacing: 10) {
+                    Text(fila.nombre)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(fila.url.path)
+                    if fila.terminada { SelloListo().id(fila.id) }
+                }
 
-                Text(fila.estado.detalle ?? fila.diagnostico?.plan(preferirLatino: preferirLatino) ?? "")
+                Text(fila.estado.detalle ?? fila.plan?.resumen
+                     ?? fila.diagnostico?.plan(preferirLatino: preferirLatino) ?? "")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+
+                if fila.estado == .procesando, let avance = fila.progreso {
+                    BarraVerde(fraccion: avance, inicio: fila.inicioDeProgreso)
+                        .frame(maxWidth: 420)
+                        .padding(.top, 2)
+                }
             }
 
             Spacer()
@@ -218,20 +231,37 @@ struct FilaDePelicula: View {
                       + "Luego arrastra aquí lo que bajes")
             }
 
-            if fila.terminada || fila.avisa {
+            if !fila.terminada, fila.avisa || fila.estado == .listaParaProcesar || fila.plan != nil {
                 Button(action: crearMKV) {
-                    Label("MKV limpio…", systemImage: "film")
+                    Label(fila.plan == nil ? "Pistas…" : "Pistas ✓", systemImage: "slider.horizontal.3")
                 }
-                .help("Crea un .mkv nuevo con los audios que elijas y este subtítulo como única pista de texto. "
-                      + "El original no se toca")
+                .help("Elige qué audios y subtítulos van en un MKV nuevo (puedes añadir un .srt). "
+                      + "«Procesar» lo crea; el original no se toca")
             }
 
             if let diagnostico = fila.diagnostico, diagnostico.pistas.filter(\.esTexto).count > 1,
                fila.estado == .listaParaProcesar {
                 selectorDePista(diagnostico)
             }
+
+            if fila.terminada {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([archivoParaMostrar])
+                } label: {
+                    Label("Mostrar", systemImage: "folder")
+                }
+                .help("Mostrar «\(archivoParaMostrar.lastPathComponent)» en el Finder")
+            }
         }
         .padding(.vertical, 4)
+        .frame(minHeight: 54)   // sitio para que el sello llegue grande sin que la fila lo recorte
+    }
+
+    /// El MKV recién creado; si no hubo, el .srt que quedó junto a la película; si tampoco, la película.
+    private var archivoParaMostrar: URL {
+        if let listo = fila.archivoListo, FileManager.default.fileExists(atPath: listo.path) { return listo }
+        let srt = Motor.destinoSRT(de: fila.url)
+        return FileManager.default.fileExists(atPath: srt.path) ? srt : fila.url
     }
 
     /// Subdivx no deja que un programa busque por su cuenta (Cloudflare), así que
@@ -349,30 +379,67 @@ struct AvisoDeHerramientas: View {
     }
 }
 
-// MARK: - MKV limpio
+// MARK: - Pistas del MKV
 
-/// Elegir qué audios se quedan y crear el .mkv nuevo con el subtítulo de SubFix.
+/// Armar el MKV a medida: qué audios, qué subtítulos del archivo y qué .srt añadidos.
+/// Se puede guardar como plan (lo crea «Procesar») o crear en el acto. Nunca deja un
+/// .srt suelto a menos que se pida con «Extraer .srt».
 struct HojaDeMKV: View {
     let video: URL
+    let planActual: PlanDeMKV?
+    let pendiente: Bool
+    let alGuardar: (PlanDeMKV?) -> Void
+    let alCrear: (URL) -> Void
     @Environment(\.dismiss) private var cerrar
 
     @State private var audios: [PistaDeAudio] = []
-    @State private var marcados: Set<Int> = []
+    @State private var subtitulos: [Pista] = []
+    @State private var audiosMarcados: Set<Int> = []
+    @State private var subsMarcados: Set<Int> = []
+    @State private var externos: [URL] = []
+    @State private var externosMarcados: Set<URL> = []
+    @State private var nombre = ""
+    @State private var nombreInicial = ""
+    @State private var idiomasAudio: [Int: Idioma] = [:]
+    @State private var idiomasSubs: [Int: Idioma] = [:]
+    @State private var idiomasExternos: [URL: Idioma] = [:]
     @State private var leyendo = true
     @State private var trabajando = false
     @State private var resultado: URL?
     @State private var error: String?
+    @State private var aviso: String?
+    @StateObject private var avance = Avance()
 
-    private var subtitulo: URL { Motor.destinoSRT(de: video) }
+    private var srtJunto: URL { Motor.destinoSRT(de: video) }
+
+    private var plan: PlanDeMKV {
+        PlanDeMKV(audios: audios.map(\.indice).filter(audiosMarcados.contains),
+                  subtitulosDelArchivo: subtitulos.filter { subsMarcados.contains($0.indice) },
+                  añadidos: externos.filter(externosMarcados.contains),
+                  nombre: nombre == nombreInicial ? nil : Remux.nombreLimpio(nombre),
+                  idiomasDeAudio: idiomasAudio.filter { audiosMarcados.contains($0.key) },
+                  idiomasDeSubtitulo: idiomasSubs.filter { subsMarcados.contains($0.key) },
+                  idiomasDeAñadidos: idiomasExternos)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("MKV limpio").font(.title2.bold())
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Pistas del MKV").font(.title2.bold())
             Text(video.lastPathComponent)
                 .font(.callout).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle)
 
-            GroupBox("Audios que se quedan") {
+            HStack(spacing: 6) {
+                Text("Nombre del archivo nuevo")
+                TextField("", text: $nombre)
+                    .textFieldStyle(.roundedBorder)
+                Text(".mkv").foregroundStyle(.secondary)
+            }
+            .help("Se crea junto a la película. Si ya existe un archivo con ese nombre, se añade «(2)»")
+
+            ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+            GroupBox("Audios") {
                 if leyendo {
                     ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(8)
                 } else if audios.isEmpty {
@@ -380,26 +447,81 @@ struct HojaDeMKV: View {
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(audios) { audio in
-                            Toggle(audio.resumen, isOn: Binding(
-                                get: { marcados.contains(audio.indice) },
-                                set: { activo in
-                                    if activo { marcados.insert(audio.indice) } else { marcados.remove(audio.indice) }
-                                }))
-                            .toggleStyle(.checkbox)
+                            HStack {
+                                marca(audio.resumen, audiosMarcados.contains(audio.indice)) {
+                                    alternar(&audiosMarcados, audio.indice, $0)
+                                }
+                                Spacer(minLength: 0)
+                                selectorDeIdioma(Binding(get: { idiomasAudio[audio.indice] },
+                                                         set: { idiomasAudio[audio.indice] = $0 }),
+                                                 sinCambios: audio.sinIdioma ? "Sin especificar"
+                                                                             : "Como está (\(audio.idioma ?? ""))")
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(8)
                 }
             }
 
-            Text("Se quitan todos los subtítulos del original y queda solo este .srt (español, UTF-8). "
-                 + "El video no se recodifica. Se crea «\(Remux.destino(para: video).lastPathComponent)» "
-                 + "al lado; el original queda intacto.")
-                .font(.callout).foregroundStyle(.secondary)
-
-            if let error {
-                Label(error, systemImage: "xmark.octagon.fill").foregroundStyle(.red).font(.callout)
+            GroupBox("Subtítulos que trae el archivo") {
+                if subtitulos.isEmpty {
+                    Text(leyendo ? "Leyendo…" : "No trae subtítulos.").foregroundStyle(.secondary).padding(8)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(subtitulos) { pista in
+                            HStack {
+                                marca(pista.resumen, subsMarcados.contains(pista.indice)) {
+                                    alternar(&subsMarcados, pista.indice, $0)
+                                }
+                                Spacer(minLength: 0)
+                                selectorDeIdioma(Binding(get: { idiomasSubs[pista.indice] },
+                                                         set: { idiomasSubs[pista.indice] = $0 }),
+                                                 sinCambios: pista.sinIdioma ? "Sin especificar"
+                                                                             : "Como está (\(pista.idioma ?? ""))")
+                                if pista.esTexto {
+                                    Button("Extraer .srt") { extraer(pista) }
+                                        .controlSize(.small)
+                                        .disabled(trabajando)
+                                        .help("Guarda esta pista, limpia y lista para el TV, como «\(srtJunto.lastPathComponent)»")
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                }
             }
+
+            GroupBox("Subtítulos añadidos") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(externos, id: \.self) { url in
+                        HStack {
+                            marca(url.lastPathComponent, externosMarcados.contains(url)) {
+                                alternar(&externosMarcados, url, $0)
+                            }
+                            Spacer(minLength: 0)
+                            selectorDeIdioma(Binding(get: { idiomasExternos[url] ?? .español },
+                                                     set: { idiomasExternos[url] = $0 ?? .español }),
+                                             sinCambios: nil)
+                        }
+                    }
+                    Button("Añadir un .srt, .zip o .rar…") { añadirExterno() }
+                        .help("Por ejemplo, el .zip que bajaste de Subdivx")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+            }
+
+            Text("Sin recodificar; se crea al lado y el original queda intacto. Los .srt añadidos se limpian y "
+                 + "van en UTF-8. Si una pista dice «Sin especificar», elige su idioma de la lista.")
+                .font(.callout).foregroundStyle(.secondary)
+            }
+            .padding(.trailing, 12)   // aire para la barra de desplazamiento
+            }
+
+            if let aviso { Label(aviso, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary) }
+            if trabajando, avance.mostrar {
+                BarraVerde(fraccion: avance.fraccion, inicio: avance.inicio)
+            }
+            if let error { Label(error, systemImage: "xmark.octagon.fill").foregroundStyle(.red).font(.callout) }
             if let resultado {
                 Label("Listo: \(resultado.lastPathComponent)", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green).font(.callout)
@@ -408,53 +530,291 @@ struct HojaDeMKV: View {
             HStack {
                 if let resultado {
                     Button("Mostrar en el Finder") { NSWorkspace.shared.activateFileViewerSelecting([resultado]) }
+                } else if planActual != nil {
+                    Button("Quitar el plan") { alGuardar(nil); cerrar() }
+                        .help("«Procesar» volverá a extraer el .srt como siempre")
                 }
                 Spacer()
                 Button(resultado == nil ? "Cancelar" : "Cerrar") { cerrar() }
                     .disabled(trabajando)
                 if resultado == nil {
+                    if pendiente {
+                        Button("Guardar para Procesar") { alGuardar(plan); cerrar() }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(trabajando || leyendo || audiosMarcados.isEmpty)
+                    }
                     Button {
                         crear()
                     } label: {
                         if trabajando {
-                            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Creando…") }
+                            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Trabajando…") }
                         } else {
-                            Text("Crear MKV")
+                            Text("Crear MKV ahora")
                         }
                     }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(trabajando || marcados.isEmpty || leyendo)
+                    .disabled(trabajando || leyendo || audiosMarcados.isEmpty)
                 }
             }
         }
         .padding(20)
-        .frame(width: 520)
+        .frame(width: 880, height: 640)
         .task { await leer() }
+    }
+
+    /// Lista desplegable de idiomas preestablecidos. `sinCambios` = la opción de dejar la
+    /// pista como viene (nil en los .srt añadidos, que siempre llevan idioma).
+    private func selectorDeIdioma(_ seleccion: Binding<Idioma?>, sinCambios: String?) -> some View {
+        Picker("", selection: seleccion) {
+            if let sinCambios {
+                Text(sinCambios).tag(Idioma?.none)
+                Divider()
+            }
+            ForEach(Idioma.lista) { idioma in
+                Text(idioma.nombre).tag(Optional(idioma))
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .fixedSize()
+        .help("Idioma con el que se rotula esta pista en el MKV nuevo")
+    }
+
+    private func marca(_ titulo: String, _ activo: Bool, _ cambio: @escaping (Bool) -> Void) -> some View {
+        Toggle(titulo, isOn: Binding(get: { activo }, set: cambio))
+            .toggleStyle(.checkbox)
+            .lineLimit(2).truncationMode(.middle)
+            .layoutPriority(1)   // el nombre de la pista manda sobre la lista de idiomas
+    }
+
+    private func alternar<T: Hashable>(_ conjunto: inout Set<T>, _ valor: T, _ activo: Bool) {
+        if activo { conjunto.insert(valor) } else { conjunto.remove(valor) }
+    }
+
+    private func añadirExterno() {
+        let panel = NSOpenPanel()
+        panel.title = "Elegir el subtítulo"
+        panel.prompt = "Añadir"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls where !externos.contains(url) {
+            externos.append(url)
+            externosMarcados.insert(url)
+        }
     }
 
     private func leer() async {
         let url = video
-        let encontrados = await Task.detached { (try? Sondeo.audios(de: url)) ?? [] }.value
+        let (encontrados, todas) = await Task.detached {
+            ((try? Sondeo.audios(de: url)) ?? [], (try? Sondeo.pistas(de: url)) ?? [])
+        }.value
         audios = encontrados
-        // Lo habitual: quedarse con el inglés. Si no hay, todo, para no dejar mudo el archivo.
-        let ingles = encontrados.filter(\.esIngles)
-        marcados = Set((ingles.isEmpty ? encontrados : ingles).map(\.indice))
+        subtitulos = todas
+        if FileManager.default.fileExists(atPath: srtJunto.path) { externos.append(srtJunto) }
+
+        nombreInicial = Remux.destino(para: video).deletingPathExtension().lastPathComponent
+        nombre = planActual?.nombre ?? nombreInicial
+        if let planActual {
+            idiomasAudio = planActual.idiomasDeAudio
+            idiomasSubs = planActual.idiomasDeSubtitulo
+            idiomasExternos = planActual.idiomasDeAñadidos
+            audiosMarcados = Set(planActual.audios)
+            subsMarcados = Set(planActual.subtitulosDelArchivo.map(\.indice))
+            for añadido in planActual.añadidos where !externos.contains(añadido) { externos.append(añadido) }
+            externosMarcados = Set(planActual.añadidos)
+        } else {
+            // Lo habitual: el inglés (o todo, si no hay) y lo que ya venga en español.
+            let ingles = encontrados.filter(\.esIngles)
+            audiosMarcados = Set((ingles.isEmpty ? encontrados : ingles).map(\.indice))
+            subsMarcados = Set(todas.filter(\.esEspañol).map(\.indice))
+        }
         leyendo = false
+    }
+
+    /// Extracción manual: deja el .srt junto a la película (lo que antes hacía «Procesar»).
+    private func extraer(_ pista: Pista) {
+        trabajando = true
+        error = nil
+        aviso = nil
+        let origen = video, destino = srtJunto
+        Task {
+            let r = await Motor.procesar(origen, opciones: Motor.Opciones(usarRed: false, forzar: true,
+                                                                        pistaPreferida: pista.indice,
+                                                                        preferirLatino: false))
+            if r.fueBien {
+                aviso = "Extraje la pista #\(pista.indice) a «\(destino.lastPathComponent)». Ya puedes añadirlo al MKV."
+                if !externos.contains(destino) { externos.insert(destino, at: 0) }
+            } else if case .falló(let motivo) = r {
+                error = motivo
+            } else {
+                error = "No se pudo extraer esa pista."
+            }
+            trabajando = false
+        }
     }
 
     private func crear() {
         trabajando = true
         error = nil
-        let origen = video, srt = subtitulo, elegidos = audios.map(\.indice).filter(marcados.contains)
+        let origen = video, elegido = plan, avance = avance
+        avance.empezar()
         Task {
             do {
-                resultado = try await Task.detached(priority: .userInitiated) {
-                    try Remux.hacer(video: origen, subtitulo: srt, audios: elegidos)
+                let hecho = try await Task.detached(priority: .userInitiated) {
+                    try Remux.hacer(video: origen, plan: elegido) { fraccion in
+                        Task { @MainActor in avance.fraccion = fraccion }
+                    }
                 }.value
+                resultado = hecho
+                alCrear(hecho)
             } catch {
                 self.error = error.localizedDescription
             }
             trabajando = false
+        }
+    }
+}
+
+// MARK: - Barra de progreso
+
+/// El avance de la hoja: una clase aparte para que el hilo que trabaja pueda avisar sin tocar la vista.
+@MainActor
+final class Avance: ObservableObject {
+    @Published var fraccion = 0.0
+    @Published var mostrar = false
+    var inicio: Date?
+
+    func empezar() {
+        fraccion = 0
+        inicio = Date()
+        mostrar = true
+    }
+}
+
+/// Barra verde con brillo, porcentaje y tiempo restante estimado.
+struct BarraVerde: View {
+    let fraccion: Double
+    var inicio: Date?
+
+    private let claro = Color(red: 0.30, green: 0.85, blue: 0.42)
+    private let oscuro = Color(red: 0.10, green: 0.62, blue: 0.27)
+
+    private var restante: String? {
+        guard let inicio, fraccion > 0.02, fraccion < 1 else { return nil }
+        let segundos = Date().timeIntervalSince(inicio) * (1 - fraccion) / fraccion
+        if segundos < 60 { return "faltan ~\(Int(segundos.rounded(.up))) s" }
+        return "faltan ~\(Int((segundos / 60).rounded(.up))) min"
+    }
+
+    var body: some View {
+        let f = min(1, max(0, fraccion))
+        VStack(alignment: .leading, spacing: 5) {
+            GeometryReader { medida in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.16))
+                        .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.12)))
+                    Capsule()
+                        .fill(LinearGradient(colors: [claro, oscuro], startPoint: .top, endPoint: .bottom))
+                        .overlay(alignment: .top) {   // el reflejo que le da volumen
+                            Capsule()
+                                .fill(LinearGradient(colors: [.white.opacity(0.45), .white.opacity(0)],
+                                                     startPoint: .top, endPoint: .bottom))
+                                .frame(height: 6)
+                                .padding(.horizontal, 3).padding(.top, 1.5)
+                        }
+                        .frame(width: max(16, medida.size.width * f))
+                        .shadow(color: claro.opacity(0.55), radius: 5)
+                }
+            }
+            .frame(height: 16)
+            .animation(.easeOut(duration: 0.45), value: f)
+
+            HStack {
+                Text("\(Int((f * 100).rounded())) %")
+                    .font(.callout.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(oscuro)
+                Spacer()
+                if let restante {
+                    Text(restante).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Progreso")
+        .accessibilityValue("\(Int((f * 100).rounded())) por ciento")
+    }
+}
+
+// MARK: - Sello «listo»
+
+/// Un fotograma del sello: se usa en la animación y para dibujar la tira de ejemplo.
+struct CuadroDelSello: View {
+    var escala: CGFloat = 1
+    var opacidad: Double = 1
+    var giro: Double = 0
+    /// 0 = sin onda; de ahí a 1, la onda verde se abre y se desvanece.
+    var onda: Double = 0
+
+    private let verde = Color(red: 0.20, green: 0.78, blue: 0.35)
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(verde, lineWidth: 2.5)
+                .scaleEffect(1 + 1.3 * onda)
+                .opacity(onda > 0 ? 0.6 * (1 - onda) : 0)
+            ZStack {
+                Circle()
+                    .fill(verde)
+                    .shadow(color: verde.opacity(0.5), radius: 5)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14, weight: .heavy))
+                    .foregroundStyle(.white)
+            }
+            .scaleEffect(escala)
+            .rotationEffect(.degrees(giro))
+            .opacity(opacidad)
+        }
+        .frame(width: 28, height: 28)
+    }
+}
+
+/// El check grande que cae como un sello al terminar: aparece ladeado y enorme, rebota
+/// hasta su tamaño y suelta una onda verde al impactar. Con «Reducir movimiento» sólo aparece.
+struct SelloListo: View {
+    var animar = true
+    @Environment(\.accessibilityReduceMotion) private var sinMovimiento
+    @State private var escala: CGFloat = 1.9
+    @State private var opacidad = 0.0
+    @State private var giro = -14.0
+    @State private var onda = 0.0
+
+    var body: some View {
+        CuadroDelSello(escala: escala, opacidad: opacidad, giro: giro, onda: onda)
+            .accessibilityLabel("Listo")
+            .onAppear(perform: estampar)
+    }
+
+    private func estampar() {
+        guard animar, !sinMovimiento else {
+            escala = 1; opacidad = 1; giro = 0
+            return
+        }
+        // Tiempos pensados para que se alcance a ver: aparece (0,4 s), se queda grande un instante,
+        // cae con un rebote lento y al golpear suelta la onda, que tarda más de un segundo en apagarse.
+        withAnimation(.easeOut(duration: 0.4)) { opacidad = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+            withAnimation(.spring(response: 0.7, dampingFraction: 0.5)) {
+                escala = 1
+                giro = 0
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {   // el golpe
+            onda = 0.001
+            withAnimation(.easeOut(duration: 1.3)) { onda = 1 }
+            NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
         }
     }
 }

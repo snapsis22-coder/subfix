@@ -36,6 +36,12 @@ func probarEsperando(_ nombre: String, _ cuerpo: () async throws -> Bool) async 
     }
 }
 
+// Todo lo que pase por Herramientas usa el ffmpeg MÍNIMO que viaja en la app, no el de Homebrew.
+// (Las muestras de prueba se siguen fabricando con el de Homebrew, que sí tiene codificadores.)
+let binPropio = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    .deletingLastPathComponent().appendingPathComponent("Resources/bin").path
+if FileManager.default.fileExists(atPath: binPropio) { setenv("SUBFIX_BIN", binPropio, 1) }
+
 let temporal = FileManager.default.temporaryDirectory
     .appendingPathComponent("subfixtests-\(UUID().uuidString)")
 try! FileManager.default.createDirectory(at: temporal, withIntermediateDirectories: true)
@@ -434,11 +440,18 @@ let videoDePrueba = temporal.appendingPathComponent("Prueba.Pelicula.2026.WEB-DL
 let subtituloFuente = temporal.appendingPathComponent("fuente.srt")
 try? "1\n00:00:01,000 --> 00:00:02,000\n¿Dónde está la niña?\n"
     .write(to: subtituloFuente, atomically: true, encoding: .utf8)
-_ = try? Herramientas.correr("ffmpeg", [
-    "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=5:duration=2",
-    "-i", subtituloFuente.path, "-map", "0:v", "-map", "1", "-c:v", "libx264",
-    "-pix_fmt", "yuv420p", "-c:s", "srt", "-metadata:s:s:0", "language=spa", videoDePrueba.path,
-])
+// Las muestras se fabrican con el ffmpeg COMPLETO de Homebrew (el de la app no codifica).
+if let fabrica = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(where: FileManager.default.isExecutableFile) {
+    let proceso = Process()
+    proceso.executableURL = URL(fileURLWithPath: fabrica)
+    proceso.arguments = [
+        "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=5:duration=2",
+        "-i", subtituloFuente.path, "-map", "0:v", "-map", "1", "-c:v", "libx264",
+        "-pix_fmt", "yuv420p", "-c:s", "srt", "-metadata:s:s:0", "language=spa", videoDePrueba.path,
+    ]
+    try? proceso.run()
+    proceso.waitUntilExit()
+}
 
 // El fallo que esto vigila: cuando cada fila era un objeto observable aparte,
 // la Cola no se enteraba de que habían terminado de analizarse y el botón
@@ -510,7 +523,7 @@ probar("los argumentos del remux: audios elegidos, sin subtítulos del original,
     let texto = args.joined(separator: " ")
     return texto.contains("-map 0:v -map 0:2 -map 0:5 -map 1:0")
         && !texto.contains("0:s") && !texto.contains("-map 0 ")
-        && texto.contains("language=spa") && texto.contains("-disposition:a:1 0")
+        && texto.contains("language=spa") && texto.contains("-disposition:a:1 -default")
 }
 
 probar("el destino del remux no pisa el original") {
@@ -523,7 +536,8 @@ if let completo = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(wh
     try! FileManager.default.createDirectory(at: carpetaMKV, withIntermediateDirectories: true)
     let pelicula = carpetaMKV.appendingPathComponent("Muestra.mkv")
     let viejo = carpetaMKV.appendingPathComponent("viejo.srt")
-    try! "1\n00:00:00,100 --> 00:00:00,900\nOld sub\n".write(to: viejo, atomically: true, encoding: .utf8)
+    let seis = { (linea: String) in (1...6).map { "\($0)\n00:00:0\($0 - 1),100 --> 00:00:0\($0 - 1),900\n\(linea)\n" }.joined(separator: "\n") }
+    try! seis("Old sub").write(to: viejo, atomically: true, encoding: .utf8)
     let p = Process()
     p.executableURL = URL(fileURLWithPath: completo)
     p.arguments = ["-nostdin", "-v", "error", "-y",
@@ -552,19 +566,194 @@ if let completo = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(wh
             && FileManager.default.fileExists(atPath: pelicula.path)
     }
 
-    probar("remux: no pisa un MKV que ya existe") {
-        do {
-            _ = try Remux.hacer(video: pelicula, subtitulo: nuevoSRT, audios: [1])
-            return false
-        } catch { return true }
+    probar("remux: si ya existe un MKV de una vez anterior, crea «(SubFix 2)» y no toca el otro") {
+        let primero = carpetaMKV.appendingPathComponent("Muestra (SubFix).mkv")   // el de la prueba anterior
+        guard FileManager.default.fileExists(atPath: primero.path) else { return false }
+        let tamañoAntes = ((try FileManager.default.attributesOfItem(atPath: primero.path))[.size] as? Int) ?? -1
+        let segundo = try Remux.hacer(video: pelicula, subtitulo: nuevoSRT, audios: [1])
+        let tamañoDespues = ((try FileManager.default.attributesOfItem(atPath: primero.path))[.size] as? Int) ?? -2
+        return segundo.lastPathComponent == "Muestra (SubFix 2).mkv" && tamañoAntes == tamañoDespues
     }
 
     probar("remux: las tildes del .srt sobreviven dentro del MKV") {
-        let hecho = Remux.destino(para: pelicula)
+        let hecho = carpetaMKV.appendingPathComponent("Muestra (SubFix).mkv")
         let extraido = carpetaMKV.appendingPathComponent("sacado.srt")
         let subs = try Sondeo.pistas(de: hecho)
         try Sondeo.extraer(pista: subs[0], de: hecho, a: extraido)
         return try TextoSRT.leer(extraido).texto.contains("¿Dónde está la niña?")
+    }
+
+    probar("MKV sin extraer: el subtítulo sale de una pista y NO deja ningún .srt junto a la película") {
+        let antes = Set(try FileManager.default.contentsOfDirectory(atPath: carpetaMKV.path))
+        let pistas = try Sondeo.pistas(de: pelicula).filter(\.esTexto)
+        guard let primera = pistas.first else { return false }
+        let temporalSRT = try Remux.prepararSubtitulo(.pista(primera), para: pelicula)
+        defer { try? FileManager.default.removeItem(at: temporalSRT) }
+        let despues = Set(try FileManager.default.contentsOfDirectory(atPath: carpetaMKV.path))
+        return antes == despues && TextoSRT.estaBienFormado(temporalSRT)
+    }
+
+    probar("MKV con subtítulo externo: acepta un .srt elegido a mano y lo limpia") {
+        let externo = carpetaMKV.appendingPathComponent("bajado.srt")
+        try seis("{\\an8}<i>Hola, ¿qué tal?</i>").write(to: externo, atomically: true, encoding: .utf8)
+        let temporalSRT = try Remux.prepararSubtitulo(.archivo(externo), para: pelicula)
+        defer { try? FileManager.default.removeItem(at: temporalSRT) }
+        let texto = try TextoSRT.leer(temporalSRT).texto
+        return texto.contains("Hola, ¿qué tal?") && !texto.contains("{\\an8}") && !texto.contains("<i>")
+    }
+
+    probar("MKV con subtítulo externo: rechaza algo que no es un .srt") {
+        let basura = carpetaMKV.appendingPathComponent("basura.srt")
+        try "<html><body>no soy un subtítulo</body></html>".write(to: basura, atomically: true, encoding: .utf8)
+        do { _ = try Remux.prepararSubtitulo(.archivo(basura), para: pelicula); return false } catch { return true }
+    }
+
+    // Plan a medida: conservar una pista del archivo + añadir un .srt, y que «Procesar» lo cree.
+    let bajado = carpetaMKV.appendingPathComponent("bajado.srt")
+    let carpetaPlan = temporal.appendingPathComponent("plan")
+    try! FileManager.default.createDirectory(at: carpetaPlan, withIntermediateDirectories: true)
+    let peliPlan = carpetaPlan.appendingPathComponent("PeliPlan.mkv")
+    try! FileManager.default.copyItem(at: pelicula, to: peliPlan)
+
+    probar("plan: conserva una pista del archivo, añade un .srt (español, por defecto) y quita el resto") {
+        let audios = try Sondeo.audios(de: peliPlan)
+        let subs = try Sondeo.pistas(de: peliPlan)
+        guard let ingles = audios.first(where: \.esIngles),
+              let inglesSub = subs.first(where: { $0.idioma == "eng" }) else { return false }
+        let plan = PlanDeMKV(audios: [ingles.indice], subtitulosDelArchivo: [inglesSub], añadidos: [bajado])
+        let hecho = try Remux.hacer(video: peliPlan, plan: plan)
+        let sal = try Sondeo.pistas(de: hecho)
+        let salidaJSON = try Herramientas.correr("ffprobe", ["-v", "error", "-select_streams", "s",
+            "-show_entries", "stream=index:stream_disposition=default", "-of", "csv=p=0", hecho.path]).texto
+        return sal.count == 2 && sal[0].idioma == "eng" && sal[1].idioma == "spa"
+            && salidaJSON.contains(",1") && salidaJSON.components(separatedBy: ",1").count == 2
+            && plan.resumen.contains("1 añadido")
+    }
+
+    probar("nombre del archivo: se limpia lo peligroso y vacío vale como «el de siempre»") {
+        Remux.nombreLimpio(" Mi/Peli:2.mkv ") == "Mi-Peli-2" && Remux.nombreLimpio(".oculta") == "oculta"
+            && Remux.nombreLimpio("   ") == nil && Remux.nombreLimpio(nil) == nil
+            && Remux.nombreLimpio("Peli.MKV") == "Peli"
+    }
+
+    probar("idiomas: los argumentos rotulan audio y subtítulos; «Sin idioma» quita el título") {
+        let vid = URL(fileURLWithPath: "/p/a.mkv"), srt = URL(fileURLWithPath: "/p/a.srt")
+        let plan = PlanDeMKV(audios: [1], subtitulosDelArchivo: [], añadidos: [srt],
+                             idiomasDeAudio: [1: Idioma.lista.first { $0.nombre == "Italiano" }!],
+                             idiomasDeAñadidos: [srt: Idioma.lista.first { $0.nombre == "Español (Latinoamérica)" }!])
+        let t = Remux.argumentos(video: vid, plan: plan, preparados: [srt], salida: URL(fileURLWithPath: "/p/o")).joined(separator: "|")
+        var plan2 = plan
+        plan2.idiomasDeAudio = [1: .sinIdioma]
+        let t2 = Remux.argumentos(video: vid, plan: plan2, preparados: [srt], salida: URL(fileURLWithPath: "/p/o")).joined(separator: "|")
+        return t.contains("-metadata:s:a:0|language=ita|-metadata:s:a:0|title=Italiano")
+            && t.contains("-metadata:s:s:0|language=spa|-metadata:s:s:0|title=Español (Latinoamérica)")
+            && t2.contains("language=und|-metadata:s:a:0|title=|")
+    }
+
+    probar("nombre e idiomas elegidos: el MKV sale con ese nombre y esos rótulos; el segundo se numera") {
+        let plan = PlanDeMKV(audios: [try Sondeo.audios(de: peliPlan).first(where: \.esIngles)!.indice],
+                             subtitulosDelArchivo: [], añadidos: [bajado], nombre: "Mi Película Editada",
+                             idiomasDeAudio: [try Sondeo.audios(de: peliPlan).first(where: \.esIngles)!.indice:
+                                                Idioma.lista.first { $0.nombre == "Français" }!],
+                             idiomasDeAñadidos: [bajado: Idioma.lista.first { $0.nombre == "Español (España)" }!])
+        let uno = try Remux.hacer(video: peliPlan, plan: plan)
+        let dos = try Remux.hacer(video: peliPlan, plan: plan)
+        let etiquetas = try Herramientas.correr("ffprobe", ["-v", "error", "-show_entries",
+            "stream=codec_type:stream_tags=language,title", "-of", "csv=p=0", uno.path]).texto
+        return uno.lastPathComponent == "Mi Película Editada.mkv" && dos.lastPathComponent == "Mi Película Editada (2).mkv"
+            && etiquetas.contains("fre,Français") && etiquetas.contains("spa,Español (España)")
+    }
+
+    probar("progreso: crece sin retroceder, queda dentro de 0…1 y termina en 1") {
+        final class Registro: @unchecked Sendable {
+            private let candado = NSLock(); private var valores: [Double] = []
+            func añadir(_ v: Double) { candado.lock(); valores.append(v); candado.unlock() }
+            var todos: [Double] { candado.lock(); defer { candado.unlock() }; return valores }
+        }
+        let registro = Registro()
+        let audios = try Sondeo.audios(de: peliPlan)
+        let plan = PlanDeMKV(audios: [audios.first!.indice], subtitulosDelArchivo: [], añadidos: [bajado],
+                             nombre: "Con progreso")
+        _ = try Remux.hacer(video: peliPlan, plan: plan) { registro.añadir($0) }
+        let v = registro.todos
+        return v.first == 0 && v.last == 1 && v.allSatisfy { $0 >= 0 && $0 <= 1 }
+            && zip(v, v.dropFirst()).allSatisfy { $0 <= $1 }
+    }
+
+    probar("plan: un subtítulo mov_text de un MP4 se convierte a SRT dentro del MKV") {
+        let mp4 = carpetaPlan.appendingPathComponent("Movil.mp4")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: completo)
+        p.arguments = ["-nostdin", "-v", "error", "-y",
+                       "-f", "lavfi", "-i", "color=c=black:s=64x64:d=1:r=10",
+                       "-f", "lavfi", "-i", "sine=d=1", "-i", viejo.path,
+                       "-map", "0", "-map", "1", "-map", "2", "-c:v", "mpeg4", "-c:a", "aac", "-c:s", "mov_text",
+                       "-metadata:s:s:0", "language=spa", mp4.path]
+        p.standardError = FileHandle.nullDevice
+        try p.run(); p.waitUntilExit()
+        let audios = try Sondeo.audios(de: mp4)
+        let subs = try Sondeo.pistas(de: mp4)
+        guard subs.first?.codec == "mov_text", let a = audios.first else { return false }
+        let hecho = try Remux.hacer(video: mp4, plan: PlanDeMKV(audios: [a.indice], subtitulosDelArchivo: subs, añadidos: []))
+        let sal = try Sondeo.pistas(de: hecho)
+        return sal.count == 1 && sal[0].codec == "subrip"
+    }
+
+    let colaPlan = await MainActor.run { Cola() }
+    let peliCola = carpetaPlan.appendingPathComponent("PeliCola.mkv")
+    try! FileManager.default.copyItem(at: pelicula, to: peliCola)
+    await MainActor.run { colaPlan.agregar([peliCola]) }
+    for _ in 0..<50 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        if await MainActor.run(body: { colaPlan.pendientes.count == 1 }) { break }
+    }
+    let idCola = await MainActor.run { colaPlan.filas.first!.id }
+    let audiosCola = try! Sondeo.audios(de: peliCola)
+    await MainActor.run {
+        colaPlan.guardarPlan(idCola, PlanDeMKV(audios: [audiosCola.first(where: \.esIngles)!.indice],
+                                               subtitulosDelArchivo: [], añadidos: [bajado]))
+        colaPlan.procesarTodo()
+    }
+    for _ in 0..<100 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        if await MainActor.run(body: { colaPlan.filas.first?.terminada == true }) { break }
+    }
+    await probarEsperando("Procesar con plan crea el MKV a medida y NO extrae el .srt") {
+        let hecho = carpetaPlan.appendingPathComponent("PeliCola (SubFix).mkv")
+        let hayMKV = FileManager.default.fileExists(atPath: hecho.path)
+        let haySRT = FileManager.default.fileExists(atPath: Motor.destinoSRT(de: peliCola).path)
+        let subs = (try? Sondeo.pistas(de: hecho)) ?? []
+        let terminada = await MainActor.run { colaPlan.filas.first?.terminada == true }
+        return hayMKV && !haySRT && terminada && subs.count == 1 && subs[0].idioma == "spa"
+            && FileManager.default.fileExists(atPath: peliCola.path)
+    }
+
+    // Regresión (6-oct): el ffmpeg mínimo sin decodificadores de video reescribía mal las marcas
+    // de tiempo al copiar video con fotogramas B y la película salía a tirones. Se prueba con
+    // el binario del PROYECTO, no con el de Homebrew, que no tenía el problema.
+    let propio = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().appendingPathComponent("Resources/bin/ffmpeg").path
+    if FileManager.default.isExecutableFile(atPath: propio) {
+        probar("el ffmpeg del bundle conserva las marcas de tiempo del video con fotogramas B") {
+            let origen = carpetaPlan.appendingPathComponent("conB.mkv")
+            let copia = carpetaPlan.appendingPathComponent("conB-copia.mkv")
+            let crear = Process()
+            crear.executableURL = URL(fileURLWithPath: completo)
+            crear.arguments = ["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x180:d=4:r=24",
+                               "-c:v", "libx265", "-preset", "ultrafast", origen.path]
+            try crear.run(); crear.waitUntilExit()
+            let copiar = Process()
+            copiar.executableURL = URL(fileURLWithPath: propio)
+            copiar.arguments = ["-nostdin", "-v", "error", "-y", "-i", origen.path, "-c", "copy", "-f", "matroska", copia.path]
+            try copiar.run(); copiar.waitUntilExit()
+            func tiempos(_ url: URL) throws -> String {
+                try Herramientas.correr("ffprobe", ["-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "packet=pts,duration", "-of", "csv=p=0", url.path]).texto
+            }
+            let antes = try tiempos(origen)
+            let despues = try tiempos(copia)
+            return !antes.isEmpty && antes == despues
+        }
     }
 } else {
     print("  ⏭  sin ffmpeg completo de Homebrew: se omiten las pruebas con archivo real")

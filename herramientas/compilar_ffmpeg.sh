@@ -12,6 +12,12 @@
 #
 # Efecto secundario útil: sin x264/x265 no entra código GPL, así que lo que se
 # empaqueta es LGPL 2.1.
+#
+# ⚠️ Los decodificadores de VIDEO no son para decodificar: sin ellos ffmpeg no puede
+# averiguar cuántos fotogramas B hay que reordenar (`has_b_frames`), supone cero y, al
+# copiar un MKV, reescribe las marcas de tiempo mal («Non-monotonic DTS … changing to»).
+# El archivo sale con los mismos datos pero el video a tirones. Sólo se usan para
+# sondear el principio del archivo; la copia sigue siendo sin recodificar.
 set -e
 
 VERSION="${1:-8.1.2}"
@@ -39,10 +45,11 @@ cd "$TRABAJO"
     --disable-programs --enable-ffmpeg --enable-ffprobe \
     --enable-demuxer=matroska,mov,avi,mpegts,srt,ass,webvtt,subviewer,mpsub \
     --enable-decoder=subrip,ass,ssa,movtext,webvtt,text \
+    --enable-decoder=h264,hevc,mpeg2video,mpeg4,vp8,vp9,vc1 \
     --enable-encoder=subrip,srt,ass,ssa,webvtt,movtext \
     --enable-muxer=srt,ass,webvtt,matroska \
     --enable-parsers --enable-bsfs \
-    --enable-protocol=file \
+    --enable-protocol=file,pipe \
     > /dev/null
 
 echo "▸ Compilando…"

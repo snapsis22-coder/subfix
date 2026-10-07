@@ -54,4 +54,8 @@ MainActor.assumeIsolated {
     }
 
     retratar(Retratos.vigilancia(Vigilante()), "3-vigilancia", en: salida)
+    retratar(Retratos.barras(), "4-barras", en: salida, alto: 300)
+    retratar(Retratos.ejemplosDeCheck(), "5-checks", en: salida, alto: 520)
+    retratar(Retratos.tiraDelSello(), "6-sello", en: salida, alto: 150)
+    retratar(Retratos.filasDeEjemplo(), "7-filas", en: salida, alto: 260)
 }

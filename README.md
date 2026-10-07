@@ -47,7 +47,7 @@ Además:
 - **Avisa cuando no puede.** Si la película solo trae subtítulos de imagen (PGS de Blu-ray, VobSub de DVD) y OpenSubtitles no tiene nada, lo dice claramente: eso necesita OCR y SubFix no lo hace.
 - **Limpia los archivos fantasma `._` ** que macOS deja en los discos exFAT.
 
-**MKV limpio.** Cuando una película ya tiene su subtítulo, el botón **MKV limpio…** crea un `.mkv` nuevo al lado (`Nombre (SubFix).mkv`) con los audios que elijas —por defecto el inglés—, sin ninguno de los subtítulos originales y con el `.srt` de SubFix como única pista, en español y marcada por defecto. No recodifica nada (copia el video y el audio tal cual, y conserva capítulos y adjuntos) y **nunca toca ni pisa el original**. Sirve, por ejemplo, para quitar un audio sobrante o para bajar las 38 pistas de un capítulo por debajo del límite que aguanta el televisor.
+**Pistas del MKV.** El botón **Pistas…** de cada película abre una hoja para armar un `.mkv` nuevo a tu medida: qué audios se quedan, qué subtítulos del archivo se conservan, qué `.srt`, `.zip` o `.rar` se añaden (por ejemplo el de Subdivx), cómo se llama el archivo y en qué idioma se rotula cada pista, con una lista desplegable de idiomas. Cada subtítulo del archivo tiene su botón **Extraer .srt** por si lo quieres suelto. Puedes guardarlo como plan —**Procesar** lo ejecuta, sin dejar ningún `.srt` suelto— o crearlo en el acto, con una barra de progreso verde. No recodifica nada (copia el video y el audio tal cual, y conserva capítulos y adjuntos), conserva las marcas de tiempo del video y **nunca toca ni pisa el original**: si el nombre ya existe, añade «(2)». Al terminar, la fila muestra un sello verde y el botón **Mostrar**. Sirve, por ejemplo, para quitar un audio sobrante o para bajar las 38 pistas de un capítulo por debajo del límite que aguanta el televisor.
 
 ## Cómo se usa
 
@@ -78,7 +78,7 @@ swift herramientas/hacer_icono.swift --paleta 3    # genera el .icns
 
 ## ffmpeg va dentro
 
-La app **no necesita Homebrew**: lleva su propio ffmpeg y ffprobe, compilados solo con los demuxers de contenedor y los códecs de subtítulo que usa. Son 2,6 MB entre los dos, sin ninguna dependencia fuera de `/usr/lib`, y la app entera pesa menos de 4 MB.
+La app **no necesita Homebrew**: lleva su propio ffmpeg y ffprobe, compilados solo con los contenedores, los códecs de subtítulo y el muxer de Matroska que usa. Son unos 8 MB entre los dos —incluyen los decodificadores de video que ffmpeg necesita para copiar bien los fotogramas B—, sin ninguna dependencia fuera de `/usr/lib`, y la app entera pesa menos de 10 MB.
 
 Copiar los binarios de Homebrew habría significado arrastrar más de treinta librerías dinámicas —x265, SVT-AV1, VMAF, OpenSSL— que esta app no toca jamás: unos 200 MB y rutas que reescribir a mano.
 
