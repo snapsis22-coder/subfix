@@ -502,5 +502,73 @@ await probarEsperando("soltar el .zip de Subdivx instala el latino y quita el av
     return bien && texto.contains("ustedes") && TextoSRT.estaBienFormado(Motor.destinoSRT(de: videoDePrueba))
 }
 
+print("\n▸ MKV limpio (remux)")
+
+probar("los argumentos del remux: audios elegidos, sin subtítulos del original, .srt como español") {
+    let args = Remux.argumentos(video: URL(fileURLWithPath: "/p/a.mkv"), subtitulo: URL(fileURLWithPath: "/p/a.srt"),
+                                audios: [2, 5], salida: URL(fileURLWithPath: "/p/.a.parcial"))
+    let texto = args.joined(separator: " ")
+    return texto.contains("-map 0:v -map 0:2 -map 0:5 -map 1:0")
+        && !texto.contains("0:s") && !texto.contains("-map 0 ")
+        && texto.contains("language=spa") && texto.contains("-disposition:a:1 0")
+}
+
+probar("el destino del remux no pisa el original") {
+    Remux.destino(para: URL(fileURLWithPath: "/p/Peli.mkv")).lastPathComponent == "Peli (SubFix).mkv"
+}
+
+if let completo = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(where: FileManager.default.isExecutableFile) {
+    // Muestra: 1 video, audio inglés + italiano, y dos subtítulos que deben desaparecer.
+    let carpetaMKV = temporal.appendingPathComponent("mkv")
+    try! FileManager.default.createDirectory(at: carpetaMKV, withIntermediateDirectories: true)
+    let pelicula = carpetaMKV.appendingPathComponent("Muestra.mkv")
+    let viejo = carpetaMKV.appendingPathComponent("viejo.srt")
+    try! "1\n00:00:00,100 --> 00:00:00,900\nOld sub\n".write(to: viejo, atomically: true, encoding: .utf8)
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: completo)
+    p.arguments = ["-nostdin", "-v", "error", "-y",
+                   "-f", "lavfi", "-i", "color=c=black:s=64x64:d=1:r=10",
+                   "-f", "lavfi", "-i", "sine=frequency=440:d=1",
+                   "-f", "lavfi", "-i", "sine=frequency=880:d=1",
+                   "-i", viejo.path, "-i", viejo.path,
+                   "-map", "0", "-map", "1", "-map", "2", "-map", "3", "-map", "4",
+                   "-c:v", "mpeg4", "-c:a", "aac", "-c:s", "srt",
+                   "-metadata:s:a:0", "language=ita", "-metadata:s:a:1", "language=eng",
+                   "-metadata:s:s:0", "language=eng", "-metadata:s:s:1", "language=fre", pelicula.path]
+    p.standardError = FileHandle.nullDevice
+    try? p.run(); p.waitUntilExit()
+
+    let nuevoSRT = Motor.destinoSRT(de: pelicula)
+    try! TextoSRT.escribirParaElTV("1\n00:00:00,100 --> 00:00:00,900\n¿Dónde está la niña?\n", en: nuevoSRT)
+
+    probar("remux: queda el inglés, se va el italiano y los subtítulos viejos, y entra el .srt en español") {
+        let audios = try Sondeo.audios(de: pelicula)
+        guard let ingles = audios.first(where: \.esIngles) else { return false }
+        let hecho = try Remux.hacer(video: pelicula, subtitulo: nuevoSRT, audios: [ingles.indice])
+        let a = try Sondeo.audios(de: hecho)
+        let subs = try Sondeo.pistas(de: hecho)
+        return a.count == 1 && a[0].idioma == "eng"
+            && subs.count == 1 && subs[0].idioma == "spa" && subs[0].codec == "subrip"
+            && FileManager.default.fileExists(atPath: pelicula.path)
+    }
+
+    probar("remux: no pisa un MKV que ya existe") {
+        do {
+            _ = try Remux.hacer(video: pelicula, subtitulo: nuevoSRT, audios: [1])
+            return false
+        } catch { return true }
+    }
+
+    probar("remux: las tildes del .srt sobreviven dentro del MKV") {
+        let hecho = Remux.destino(para: pelicula)
+        let extraido = carpetaMKV.appendingPathComponent("sacado.srt")
+        let subs = try Sondeo.pistas(de: hecho)
+        try Sondeo.extraer(pista: subs[0], de: hecho, a: extraido)
+        return try TextoSRT.leer(extraido).texto.contains("¿Dónde está la niña?")
+    }
+} else {
+    print("  ⏭  sin ffmpeg completo de Homebrew: se omiten las pruebas con archivo real")
+}
+
 print("\n\(pasadas) pasadas, \(falladas) falladas\n")
 exit(falladas == 0 ? 0 : 1)

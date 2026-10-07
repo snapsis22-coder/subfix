@@ -47,9 +47,11 @@ Además:
 - **Avisa cuando no puede.** Si la película solo trae subtítulos de imagen (PGS de Blu-ray, VobSub de DVD) y OpenSubtitles no tiene nada, lo dice claramente: eso necesita OCR y SubFix no lo hace.
 - **Limpia los archivos fantasma `._` ** que macOS deja en los discos exFAT.
 
+**MKV limpio.** Cuando una película ya tiene su subtítulo, el botón **MKV limpio…** crea un `.mkv` nuevo al lado (`Nombre (SubFix).mkv`) con los audios que elijas —por defecto el inglés—, sin ninguno de los subtítulos originales y con el `.srt` de SubFix como única pista, en español y marcada por defecto. No recodifica nada (copia el video y el audio tal cual, y conserva capítulos y adjuntos) y **nunca toca ni pisa el original**. Sirve, por ejemplo, para quitar un audio sobrante o para bajar las 38 pistas de un capítulo por debajo del límite que aguanta el televisor.
+
 ## Cómo se usa
 
-**Películas** — arrastras archivos o una carpeta entera. Antes de tocar nada te muestra qué piensa hacer con cada una, y si hay varias pistas de texto puedes cambiar la elegida.
+**Películas** — arrastras archivos o una carpeta entera, o los eliges con **Explorar…**. Antes de tocar nada te muestra qué piensa hacer con cada una, y si hay varias pistas de texto puedes cambiar la elegida.
 
 Con *Carpeta por capítulo* activada, cada capítulo se mueve con su `.srt` a una subcarpeta propia (`Ted Lasso S01E01/`). Dentro del mismo disco es un renombrado instantáneo, solo se mueve lo que quedó con subtítulo y nunca se pisa nada.
 

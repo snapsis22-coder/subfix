@@ -54,17 +54,18 @@ public struct VistaPrincipal: View {
 struct VistaPeliculas: View {
     @ObservedObject var cola: Cola
     @State private var encima = false
+    @State private var paraMKV: Fila?
 
     var body: some View {
         VStack(spacing: 0) {
             if cola.filas.isEmpty {
-                ZonaVacia(encima: encima)
+                ZonaVacia(encima: encima, explorar: explorar)
             } else {
                 List {
                     ForEach(cola.filas) { fila in
-                        FilaDePelicula(fila: fila, preferirLatino: cola.preferirLatino && cola.usarRed) { indice in
-                            cola.elegirPista(fila.id, indice: indice)
-                        }
+                        FilaDePelicula(fila: fila, preferirLatino: cola.preferirLatino && cola.usarRed,
+                                       elegirPista: { indice in cola.elegirPista(fila.id, indice: indice) },
+                                       crearMKV: { paraMKV = fila })
                     }
                 }
                 .listStyle(.inset)
@@ -88,6 +89,19 @@ struct VistaPeliculas: View {
             return true
         } isTargeted: { encima = $0 }
         .animation(.easeInOut(duration: 0.15), value: encima)
+        .sheet(item: $paraMKV) { fila in
+            HojaDeMKV(video: fila.url)
+        }
+    }
+
+    private func explorar() {
+        let panel = NSOpenPanel()
+        panel.title = "Elegir películas, carpetas o subtítulos"
+        panel.prompt = "Añadir"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        if panel.runModal() == .OK { cola.agregar(panel.urls) }
     }
 
     private var barraInferior: some View {
@@ -106,6 +120,10 @@ struct VistaPeliculas: View {
                 .help("Mueve cada capítulo con su .srt a una subcarpeta propia, p. ej. «Ted Lasso S01E01»")
 
             Spacer()
+
+            Button("Explorar…", action: explorar)
+                .disabled(cola.trabajando)
+                .help("Elegir películas, carpetas o el .zip/.srt de Subdivx sin arrastrar")
 
             if !cola.filas.isEmpty {
                 Button("Vaciar") { cola.vaciar() }
@@ -135,6 +153,7 @@ struct VistaPeliculas: View {
 
 struct ZonaVacia: View {
     let encima: Bool
+    let explorar: () -> Void
 
     var body: some View {
         VStack(spacing: 14) {
@@ -148,6 +167,8 @@ struct ZonaVacia: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            Button("Explorar…", action: explorar)
+                .controlSize(.large)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
@@ -163,6 +184,7 @@ struct FilaDePelicula: View {
     let fila: Fila
     let preferirLatino: Bool
     let elegirPista: (Int) -> Void
+    let crearMKV: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -194,6 +216,14 @@ struct FilaDePelicula: View {
                 }
                 .help("Abre Subdivx y copia «\(Motor.busquedaSubdivx(para: fila.url))» para pegarla en el buscador. "
                       + "Luego arrastra aquí lo que bajes")
+            }
+
+            if fila.terminada || fila.avisa {
+                Button(action: crearMKV) {
+                    Label("MKV limpio…", systemImage: "film")
+                }
+                .help("Crea un .mkv nuevo con los audios que elijas y este subtítulo como única pista de texto. "
+                      + "El original no se toca")
             }
 
             if let diagnostico = fila.diagnostico, diagnostico.pistas.filter(\.esTexto).count > 1,
@@ -316,5 +346,115 @@ struct AvisoDeHerramientas: View {
         .padding(10)
         .background(.regularMaterial)
         .overlay(Divider(), alignment: .top)
+    }
+}
+
+// MARK: - MKV limpio
+
+/// Elegir qué audios se quedan y crear el .mkv nuevo con el subtítulo de SubFix.
+struct HojaDeMKV: View {
+    let video: URL
+    @Environment(\.dismiss) private var cerrar
+
+    @State private var audios: [PistaDeAudio] = []
+    @State private var marcados: Set<Int> = []
+    @State private var leyendo = true
+    @State private var trabajando = false
+    @State private var resultado: URL?
+    @State private var error: String?
+
+    private var subtitulo: URL { Motor.destinoSRT(de: video) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("MKV limpio").font(.title2.bold())
+            Text(video.lastPathComponent)
+                .font(.callout).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+
+            GroupBox("Audios que se quedan") {
+                if leyendo {
+                    ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(8)
+                } else if audios.isEmpty {
+                    Text("No encontré pistas de audio.").foregroundStyle(.secondary).padding(8)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(audios) { audio in
+                            Toggle(audio.resumen, isOn: Binding(
+                                get: { marcados.contains(audio.indice) },
+                                set: { activo in
+                                    if activo { marcados.insert(audio.indice) } else { marcados.remove(audio.indice) }
+                                }))
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                }
+            }
+
+            Text("Se quitan todos los subtítulos del original y queda solo este .srt (español, UTF-8). "
+                 + "El video no se recodifica. Se crea «\(Remux.destino(para: video).lastPathComponent)» "
+                 + "al lado; el original queda intacto.")
+                .font(.callout).foregroundStyle(.secondary)
+
+            if let error {
+                Label(error, systemImage: "xmark.octagon.fill").foregroundStyle(.red).font(.callout)
+            }
+            if let resultado {
+                Label("Listo: \(resultado.lastPathComponent)", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green).font(.callout)
+            }
+
+            HStack {
+                if let resultado {
+                    Button("Mostrar en el Finder") { NSWorkspace.shared.activateFileViewerSelecting([resultado]) }
+                }
+                Spacer()
+                Button(resultado == nil ? "Cancelar" : "Cerrar") { cerrar() }
+                    .disabled(trabajando)
+                if resultado == nil {
+                    Button {
+                        crear()
+                    } label: {
+                        if trabajando {
+                            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Creando…") }
+                        } else {
+                            Text("Crear MKV")
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trabajando || marcados.isEmpty || leyendo)
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+        .task { await leer() }
+    }
+
+    private func leer() async {
+        let url = video
+        let encontrados = await Task.detached { (try? Sondeo.audios(de: url)) ?? [] }.value
+        audios = encontrados
+        // Lo habitual: quedarse con el inglés. Si no hay, todo, para no dejar mudo el archivo.
+        let ingles = encontrados.filter(\.esIngles)
+        marcados = Set((ingles.isEmpty ? encontrados : ingles).map(\.indice))
+        leyendo = false
+    }
+
+    private func crear() {
+        trabajando = true
+        error = nil
+        let origen = video, srt = subtitulo, elegidos = audios.map(\.indice).filter(marcados.contains)
+        Task {
+            do {
+                resultado = try await Task.detached(priority: .userInitiated) {
+                    try Remux.hacer(video: origen, subtitulo: srt, audios: elegidos)
+                }.value
+            } catch {
+                self.error = error.localizedDescription
+            }
+            trabajando = false
+        }
     }
 }
