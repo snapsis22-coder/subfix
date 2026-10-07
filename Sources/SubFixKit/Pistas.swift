@@ -128,3 +128,67 @@ public enum Sondeo {
         }
     }
 }
+
+// MARK: - Audio
+
+/// Una pista de audio del contenedor.
+public struct PistaDeAudio: Identifiable, Hashable, Sendable {
+    public let indice: Int
+    public let codec: String
+    public let idioma: String?
+    public let titulo: String?
+    public let canales: Int?
+
+    public var id: Int { indice }
+
+    public init(indice: Int, codec: String, idioma: String?, titulo: String?, canales: Int?) {
+        self.indice = indice
+        self.codec = codec
+        self.idioma = idioma
+        self.titulo = titulo
+        self.canales = canales
+    }
+
+    public var esIngles: Bool {
+        let campos = "\(idioma ?? "") \(titulo ?? "")".lowercased()
+        return ["eng", "en", "english", "inglés", "ingles"].contains { termino in
+            campos.range(of: "\\b\(termino)\\b", options: .regularExpression) != nil
+        }
+    }
+
+    public var resumen: String {
+        var partes = ["#\(indice)", idioma ?? "sin idioma", codec]
+        if let canales { partes.append(canales == 6 ? "5.1" : canales == 2 ? "estéreo" : "\(canales) canales") }
+        if let titulo, !titulo.isEmpty { partes.append(titulo) }
+        return partes.joined(separator: " · ")
+    }
+}
+
+extension Sondeo {
+
+    private struct RespuestaAudio: Decodable {
+        struct Flujo: Decodable {
+            let index: Int
+            let codec_name: String?
+            let channels: Int?
+            let tags: [String: String]?
+        }
+        let streams: [Flujo]?
+    }
+
+    public static func audios(de url: URL) throws -> [PistaDeAudio] {
+        let salida = try Herramientas.correr("ffprobe", [
+            "-v", "error", "-select_streams", "a",
+            "-show_entries", "stream=index,codec_name,channels:stream_tags=language,title",
+            "-print_format", "json", url.path,
+        ])
+        guard salida.codigo == 0 else {
+            throw ErrorDeSubFix.noSePudoSondear(salida.error.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let respuesta = try JSONDecoder().decode(RespuestaAudio.self, from: Data(salida.texto.utf8))
+        return (respuesta.streams ?? []).map {
+            PistaDeAudio(indice: $0.index, codec: $0.codec_name ?? "desconocido",
+                         idioma: $0.tags?["language"], titulo: $0.tags?["title"], canales: $0.channels)
+        }
+    }
+}

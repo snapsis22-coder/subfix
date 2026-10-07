@@ -1,5 +1,6 @@
 #!/bin/zsh
 # Compila un ffmpeg/ffprobe mínimo y estático para meterlo dentro de SubFix.app.
+# Además de leer subtítulos, sabe empaquetar un .mkv copiando pistas (sin recodificar).
 #
 #     ./herramientas/compilar_ffmpeg.sh
 #
@@ -23,7 +24,7 @@ echo "▸ Descargando ffmpeg $VERSION…"
 mkdir -p "$TRABAJO"
 curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz" | tar xJ -C "$TRABAJO" --strip-components=1
 
-echo "▸ Configurando (sólo subtítulos)…"
+echo "▸ Configurando (subtítulos + remux a MKV)…"
 cd "$TRABAJO"
 ./configure \
     --prefix="$TRABAJO/instalado" \
@@ -39,7 +40,8 @@ cd "$TRABAJO"
     --enable-demuxer=matroska,mov,avi,mpegts,srt,ass,webvtt,subviewer,mpsub \
     --enable-decoder=subrip,ass,ssa,movtext,webvtt,text \
     --enable-encoder=subrip,srt,ass,ssa,webvtt,movtext \
-    --enable-muxer=srt,ass,webvtt \
+    --enable-muxer=srt,ass,webvtt,matroska \
+    --enable-parsers --enable-bsfs \
     --enable-protocol=file \
     > /dev/null
 
