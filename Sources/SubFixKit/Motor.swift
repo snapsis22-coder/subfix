@@ -21,7 +21,10 @@ public enum Motor {
         /// Lo que se hará al procesar, en una línea para la lista.
         public var plan: String {
             if let error { return error }
-            if srtExistente != nil { return srtBienFormado ? "Ya tiene subtítulo correcto" : "Reparar el .srt existente" }
+            if srtExistente != nil {
+                if !srtEsEspañol { return "El .srt que tiene NO es español: se apartará y se buscará otro" }
+                return srtBienFormado ? "Ya tiene subtítulo en español" : "Reparar el .srt existente"
+            }
             if let elegida { return "Extraer \(elegida.codec) · \(elegida.idioma ?? "?")" }
             if let suelto { return "Usar \(suelto.lastPathComponent)" }
             if !pistasDeImagen.isEmpty { return "Sólo imagen — buscar en OpenSubtitles" }
@@ -29,7 +32,13 @@ public enum Motor {
         }
 
         /// Lo mismo que `plan`, contando con que se busque latino para las series.
-        public func plan(preferirLatino: Bool) -> String {
+        public func plan(preferirLatino: Bool, extraerDelArchivo: Bool = true, pistaManual: Bool = false) -> String {
+            if srtExistente != nil, srtEsEspañol, srtDeEspaña, preferirLatino {
+                return "El .srt que tiene es de España: con «Subdivx» buscas el latino"
+            }
+            if !extraerDelArchivo, !pistaManual, srtExistente == nil {
+                return preferirLatino ? "Buscar subtítulo en español latino en la web" : "Buscar subtítulo en español en la web"
+            }
             guard preferirLatino, esEpisodio, error == nil, srtExistente == nil,
                   elegida?.esLatino != true else { return plan }
             if let elegida { return "Buscar latino en Addic7ed · si no hay, \(elegida.codec) · \(elegida.idioma ?? "?")" }
@@ -39,6 +48,9 @@ public enum Motor {
         public var esEpisodio: Bool { carpeta != nil }
         /// «Ted Lasso S01E01» si el archivo es un capítulo de serie.
         public let carpeta: String?
+        /// Del .srt que ya está junto al video: si es español de verdad y si es de España.
+        public internal(set) var srtEsEspañol = true
+        public internal(set) var srtDeEspaña = false
 
         public var necesitaRed: Bool {
             srtExistente == nil && elegida == nil && suelto == nil
@@ -46,6 +58,15 @@ public enum Motor {
     }
 
     public static func diagnosticar(_ video: URL) -> Diagnostico {
+        var diagnostico = diagnosticarPistas(video)
+        if let existente = diagnostico.srtExistente, let texto = try? TextoSRT.leer(existente).texto {
+            diagnostico.srtEsEspañol = TextoSRT.pareceEspañol(texto)
+            diagnostico.srtDeEspaña = TextoSRT.pareceDeEspaña(texto)
+        }
+        return diagnostico
+    }
+
+    private static func diagnosticarPistas(_ video: URL) -> Diagnostico {
         let destino = destinoSRT(de: video)
         let existente = FileManager.default.fileExists(atPath: destino.path) ? destino : nil
         let carpeta = carpetaDeCapitulo(para: video)
@@ -53,7 +74,10 @@ public enum Motor {
         do {
             let pistas = try Sondeo.pistas(de: video)
             let deTexto = pistas.filter(\.esTexto)
-            let candidatas = deTexto.filter(\.esEspañol).isEmpty ? deTexto : deTexto.filter(\.esEspañol)
+            // Si no hay ninguna marcada en español, sólo valen las que no dicen idioma
+            // (pueden serlo); una marcada «eng» o «fre» nunca se toma por español.
+            let sinIdioma = deTexto.filter { ($0.idioma ?? "und").isEmpty || ($0.idioma ?? "und") == "und" }
+            let candidatas = deTexto.filter(\.esEspañol).isEmpty ? sinIdioma : deTexto.filter(\.esEspañol)
             let mejor = Sondeo.mejor(entre: candidatas)
             return Diagnostico(pistas: pistas,
                                elegida: mejor?.elegida,
@@ -78,6 +102,9 @@ public enum Motor {
         case reparado(codificacionAnterior: String, deEspaña: Bool)
         case yaEstaba(deEspaña: Bool)
         case sinSubtitulos(soloImagen: Bool)
+        /// Sólo apareció el de España y se pidió latino: queda apartado en `candidato`
+        /// (un temporal) y NO se pone junto a la película hasta que el usuario lo acepte.
+        case soloEspaña(origen: String, candidato: URL)
         case falló(String)
 
         public var fueBien: Bool {
@@ -95,9 +122,16 @@ public enum Motor {
         /// En series, buscar primero el latino en Addic7ed aunque el archivo
         /// traiga una pista en español (casi siempre es la de España).
         public var preferirLatino: Bool
+        /// Sacar el subtítulo de una pista del archivo (o del .srt suelto). Apagado,
+        /// sólo se busca en la web; una pista elegida a mano (`pistaPreferida`) manda.
+        public var extraerDelArchivo: Bool
+        /// Si lo único que hay es de España, no instalarlo: devolver `.soloEspaña`.
+        public var retenerEspaña: Bool
 
         public init(usarRed: Bool = true, forzar: Bool = false, pistaPreferida: Int? = nil,
-                    preferirLatino: Bool = false) {
+                    preferirLatino: Bool = false, extraerDelArchivo: Bool = true, retenerEspaña: Bool = false) {
+            self.extraerDelArchivo = extraerDelArchivo
+            self.retenerEspaña = retenerEspaña
             self.usarRed = usarRed
             self.forzar = forzar
             self.pistaPreferida = pistaPreferida
@@ -105,11 +139,23 @@ public enum Motor {
         }
     }
 
+    /// Botón «Extraer latino»: sólo saca el subtítulo del propio archivo (el latino primero),
+    /// lo limpia y lo deja como .srt junto al video. Sin internet. Reemplaza el .srt que hubiera
+    /// (apartándolo como «.anterior»); el de España no se pone sin permiso.
+    public static let extraerLatino = Opciones(usarRed: false, forzar: true, preferirLatino: true,
+                                               extraerDelArchivo: true, retenerEspaña: true)
+
     public static func procesar(_ video: URL, opciones: Opciones = Opciones()) async -> Resultado {
         let destino = destinoSRT(de: video)
 
         // Existir no basta: los .srt que vienen con el torrent suelen estar en
         // Latin-1 y sin CRLF, que es justo lo que el TV pinta como basura.
+        // Uno que ni siquiera es español (un francés que se coló) no cuenta como
+        // puesto: se aparta como «.anterior» y se busca otro.
+        if FileManager.default.fileExists(atPath: destino.path), !opciones.forzar,
+           let texto = try? TextoSRT.leer(destino).texto, !TextoSRT.pareceEspañol(texto) {
+            do { try TextoSRT.apartar(destino) } catch { return .falló(error.localizedDescription) }
+        }
         if FileManager.default.fileExists(atPath: destino.path), !opciones.forzar {
             if TextoSRT.estaBienFormado(destino) {
                 let texto = (try? TextoSRT.leer(destino).texto) ?? ""
@@ -125,61 +171,91 @@ public enum Motor {
             }
         }
 
-        var texto: String
-        var origen: String
-
         let diagnostico = diagnosticar(video)
         if let error = diagnostico.error, diagnostico.pistas.isEmpty {
             return .falló(error)
         }
 
-        let pista = opciones.pistaPreferida.flatMap { indice in
+        let delArchivo = opciones.extraerDelArchivo || opciones.pistaPreferida != nil
+        let pista = delArchivo ? (opciones.pistaPreferida.flatMap { indice in
             diagnostico.pistas.first { $0.indice == indice }
-        } ?? diagnostico.elegida
+        } ?? diagnostico.elegida) : nil
 
         // Si el usuario eligió la pista a mano, manda él.
-        let latino = opciones.usarRed && opciones.preferirLatino && diagnostico.esEpisodio
+        let latino = opciones.usarRed && (opciones.preferirLatino || !delArchivo) && diagnostico.esEpisodio
             && opciones.pistaPreferida == nil && pista?.esLatino != true
             ? await Addic7ed.buscarLatino(para: video) : nil
 
-        if let latino {
-            texto = latino.texto
-            origen = latino.explicacion
-        } else if let pista {
+        var hallado: (texto: String, origen: String)?
+        if let latino { hallado = (latino.texto, latino.explicacion) }
+
+        if hallado == nil, let pista {
             let temporal = FileManager.default.temporaryDirectory
                 .appendingPathComponent("subfix-\(UUID().uuidString).srt")
             defer { try? FileManager.default.removeItem(at: temporal) }
             do {
                 try Sondeo.extraer(pista: pista, de: video, a: temporal)
-                texto = try TextoSRT.leer(temporal).texto
-                origen = "pista \(pista.resumen)"
+                let texto = try TextoSRT.leer(temporal).texto
+                // Una pista elegida a mano manda; una elegida sola tiene que ser español
+                // de verdad (una pista sin idioma marcado puede ser inglés).
+                if opciones.pistaPreferida != nil || TextoSRT.pareceEspañol(texto) {
+                    hallado = (texto, "pista \(pista.resumen)")
+                }
             } catch {
                 return .falló(error.localizedDescription)
             }
-        } else if let suelto = diagnostico.suelto ?? sueltoPara(video) {
-            do {
-                let leido = try TextoSRT.leer(suelto)
-                texto = leido.texto
-                origen = "\(suelto.lastPathComponent) (\(leido.codificacion))"
-            } catch {
-                return .falló(error.localizedDescription)
-            }
-        } else if opciones.usarRed, let hallazgo = await OpenSubtitles.buscar(para: video) {
-            texto = hallazgo.texto
-            origen = hallazgo.explicacion
-        } else {
-            return .sinSubtitulos(soloImagen: !diagnostico.pistasDeImagen.isEmpty)
         }
 
-        return instalar(texto, origen: origen, en: destino)
+        if hallado == nil, delArchivo, let suelto = diagnostico.suelto ?? sueltoPara(video) {
+            do {
+                let leido = try TextoSRT.leer(suelto)
+                if TextoSRT.pareceEspañol(leido.texto) {
+                    hallado = (leido.texto, "\(suelto.lastPathComponent) (\(leido.codificacion))")
+                }
+            } catch {
+                return .falló(error.localizedDescription)
+            }
+        }
+
+        if hallado == nil, opciones.usarRed,
+           let encontrado = await OpenSubtitles.buscar(para: video, preferirLatino: opciones.preferirLatino) {
+            hallado = (encontrado.texto, encontrado.explicacion)
+        }
+
+        guard let hallado else { return .sinSubtitulos(soloImagen: !diagnostico.pistasDeImagen.isEmpty) }
+        return instalar(hallado.texto, origen: hallado.origen, en: destino, retenerEspaña: opciones.retenerEspaña)
     }
 
     /// Limpia el texto y lo deja junto al video con el formato que el TV entiende.
     /// Lo que hubiera antes se aparta como «.anterior», nunca se pisa.
-    private static func instalar(_ texto: String, origen: String, en destino: URL) -> Resultado {
+    private static func instalar(_ texto: String, origen: String, en destino: URL,
+                                 retenerEspaña: Bool = false) -> Resultado {
         let sinEtiquetas = TextoSRT.quitarEtiquetasASS(texto)
         let depurado = TextoSRT.depurarCaracteres(sinEtiquetas.texto)
         let limpio = TextoSRT.quitarPublicidad(depurado.texto)
+        if retenerEspaña, TextoSRT.pareceDeEspaña(limpio.texto) {
+            // Se aparta ya limpio, con el nombre que llevaría: aceptarlo es sólo instalar este archivo.
+            let carpeta = FileManager.default.temporaryDirectory
+                .appendingPathComponent("subfix-espana-\(UUID().uuidString)")
+            let candidato = carpeta.appendingPathComponent(destino.lastPathComponent)
+            do {
+                try FileManager.default.createDirectory(at: carpeta, withIntermediateDirectories: true)
+                try TextoSRT.escribirParaElTV(limpio.texto, en: candidato)
+            } catch {
+                return .falló(error.localizedDescription)
+            }
+            return .soloEspaña(origen: origen, candidato: candidato)
+        }
+        let lineas = limpio.texto.components(separatedBy: "\n").count
+        // Ya estaba exactamente así (p. ej. el botón pulsado dos veces): no se aparta nada.
+        let normal = { (t: String) in
+            t.replacingOccurrences(of: "\r\n", with: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let actual = try? TextoSRT.leer(destino).texto, normal(actual) == normal(limpio.texto) {
+            return .listo(origen: origen, lineas: lineas, publicidadQuitada: limpio.quitados,
+                          etiquetasLimpiadas: sinEtiquetas.tocadas, caracteresDepurados: depurado.tocadas,
+                          deEspaña: TextoSRT.pareceDeEspaña(limpio.texto))
+        }
         do {
             if FileManager.default.fileExists(atPath: destino.path) {
                 try TextoSRT.apartar(destino)
@@ -188,7 +264,6 @@ public enum Motor {
         } catch {
             return .falló(error.localizedDescription)
         }
-        let lineas = limpio.texto.components(separatedBy: "\n").count
         return .listo(origen: origen, lineas: lineas, publicidadQuitada: limpio.quitados,
                       etiquetasLimpiadas: sinEtiquetas.tocadas, caracteresDepurados: depurado.tocadas,
                       deEspaña: TextoSRT.pareceDeEspaña(limpio.texto))
@@ -198,11 +273,16 @@ public enum Motor {
 
     /// Instala un .srt que el usuario bajó por su cuenta. Lo pidió él, así que
     /// reemplaza lo que hubiera (apartándolo).
-    public static func adoptar(_ subtitulo: URL, para video: URL) -> Resultado {
+    public static func adoptar(_ subtitulo: URL, para video: URL, retenerEspaña: Bool = false) -> Resultado {
         do {
             let (texto, codificacion) = try TextoSRT.leer(subtitulo)
+            // Lo bajado puede ser un aviso del sitio con extensión .srt («No se pudo extraer
+            // el archivo. Error técnico.», 46 bytes): eso jamás se pone junto al video.
+            guard TextoSRT.esSRT(texto) else {
+                return .falló("«\(subtitulo.lastPathComponent)» no es un subtítulo de verdad")
+            }
             return instalar(texto, origen: "\(subtitulo.lastPathComponent) (\(codificacion))",
-                            en: destinoSRT(de: video))
+                            en: destinoSRT(de: video), retenerEspaña: retenerEspaña)
         } catch {
             return .falló(error.localizedDescription)
         }
@@ -268,8 +348,11 @@ public enum Motor {
         func puntaje(_ srt: URL) -> Int {
             let texto = (try? TextoSRT.leer(srt).texto) ?? ""
             var n = 0
+            // Si no es un .srt de verdad o no es español, no compite: antes un francés
+            // le ganaba al de España, y un aviso de error del sitio pasaba por subtítulo.
+            guard TextoSRT.esSRT(texto), TextoSRT.pareceEspañol(texto) else { return -1 }
             if !TextoSRT.pareceDeEspaña(texto) { n += 10 }
-            if TextoSRT.pareceEspañol(texto) { n += 5 }
+            n += 5
             if srt.lastPathComponent.range(of: "latin", options: .caseInsensitive) != nil { n += 2 }
             return n
         }
@@ -283,7 +366,7 @@ public enum Motor {
             } else {
                 candidatos = videos.count == 1 ? subtitulos : []
             }
-            if let mejor = candidatos.max(by: { puntaje($0) < puntaje($1) }) {
+            if let mejor = candidatos.max(by: { puntaje($0) < puntaje($1) }), puntaje(mejor) >= 0 {
                 pares.append((video, mejor))
             }
         }
@@ -330,9 +413,12 @@ public enum Motor {
 
         let base = video.deletingPathExtension().lastPathComponent
         let acompañantes = ((try? gestor.contentsOfDirectory(atPath: actual.path)) ?? [])
-            .filter { $0.hasPrefix(base + ".") && !$0.hasPrefix("._")
-                      && $0 != video.lastPathComponent
-                      && ($0.hasSuffix(".srt") || $0.contains(".srt.anterior")) }
+            .filter { nombre in
+                guard !nombre.hasPrefix("._"), nombre != video.lastPathComponent else { return false }
+                // El .srt y lo apartado, y también el MKV que SubFix creó al lado.
+                return (nombre.hasPrefix(base + ".") && (nombre.hasSuffix(".srt") || nombre.contains(".srt.anterior")))
+                    || (nombre.hasPrefix(base + " (SubFix") && nombre.hasSuffix(".mkv"))
+            }
             .map { actual.appendingPathComponent($0) }
 
         for archivo in [video] + acompañantes {

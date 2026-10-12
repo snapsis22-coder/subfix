@@ -130,13 +130,23 @@ public enum TextoSRT {
     /// Los sitios etiquetan lo que el usuario sube, y a veces se equivoca: el
     /// «Spanish (Latin America)» de Ted Lasso 1x02 en Addic7ed es el inglés. Se
     /// cuentan palabras frecuentes que solo existen en uno de los dos idiomas.
+    /// Palabras que SOLO usa el español: «que», «la», «en», «es» también son francesas,
+    /// y con ellas un subtítulo en francés pasaba por español (Ted Lasso 3x11, 9-oct).
     static let palabrasEspañol: Set<String> = [
-        "que", "el", "la", "los", "las", "es", "y", "en", "por", "qué", "lo", "un", "una",
-        "con", "para", "está", "pero", "se", "del", "al", "yo", "eso", "esto", "muy", "sí",
+        "el", "los", "las", "y", "por", "qué", "eso", "esto", "muy", "sí", "yo", "ahora",
+        "aquí", "hay", "cómo", "dónde", "tengo", "nada", "también", "gracias", "usted",
+        "ustedes", "vamos", "pues", "estoy", "puedes", "creo", "entonces", "bueno", "pero",
     ]
-    static let palabrasIngles: Set<String> = [
-        "the", "you", "to", "and", "it", "is", "that", "of", "what", "this", "my", "we",
-        "don't", "i'm", "it's", "for", "your", "have", "just", "be", "are", "with",
+    /// Las de los idiomas con los que se puede confundir, cada una propia de su idioma.
+    static let palabrasDeOtrosIdiomas: [Set<String>] = [
+        ["the", "you", "to", "and", "it", "is", "that", "of", "what", "this", "my", "we",
+         "don't", "i'm", "it's", "for", "your", "have", "just", "be", "are", "with"],          // inglés
+        ["je", "vous", "nous", "est", "pas", "c'est", "mais", "pour", "avec", "suis", "oui",
+         "très", "j'ai", "ne", "il", "elle", "une", "du", "au", "ça", "ai", "sont", "fait"],   // francés
+        ["não", "você", "é", "isso", "muito", "obrigado", "eu", "ele", "ela", "uma", "com",
+         "tem", "em", "ao", "já", "foi", "sim", "agora", "aqui", "também", "vocês"],          // portugués
+        ["non", "è", "sono", "che", "di", "questo", "molto", "grazie", "ciao", "io", "gli",
+         "della", "perché", "cosa", "anche", "ho", "hai", "ma", "sì", "cosa"],                // italiano
     ]
 
     /// ¿Es de verdad un .srt? Una página HTML (cupo diario de Addic7ed) también trae
@@ -154,12 +164,15 @@ public enum TextoSRT {
     public static func pareceEspañol(_ texto: String) -> Bool {
         let palabras = texto.lowercased()
             .components(separatedBy: CharacterSet.letters.union(CharacterSet(charactersIn: "'")).inverted)
-        var es = 0, en = 0
+        var es = 0
+        var otros = Array(repeating: 0, count: palabrasDeOtrosIdiomas.count)
         for p in palabras {
-            if palabrasEspañol.contains(p) { es += 1 } else if palabrasIngles.contains(p) { en += 1 }
+            if palabrasEspañol.contains(p) { es += 1; continue }
+            for (i, idioma) in palabrasDeOtrosIdiomas.enumerated() where idioma.contains(p) { otros[i] += 1 }
         }
-        guard es + en >= 30 else { return true }     // muy poco texto para juzgar
-        return es > 2 * en
+        let rival = otros.max() ?? 0
+        guard es + rival >= 30 else { return true }     // muy poco texto para juzgar
+        return es > 2 * rival
     }
 
     /// El castellano de España se delata por el vosotros: «sois», «os», «tenéis»,

@@ -7,6 +7,7 @@ struct SubFixApp: App {
         Window("SubFix", id: "principal") {
             VistaPrincipal()
         }
+        .defaultSize(width: 1000, height: 700)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}   // no hay documentos que crear

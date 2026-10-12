@@ -10,11 +10,16 @@ public enum Addic7ed {
 
     static let base = "https://www.addic7ed.com"
     static let idiomaLatino = 6
+    /// Cómo rotula Addic7ed la fila del latino. Si el capítulo NO tiene latino, la
+    /// página «/6» igual lista las versiones en otros idiomas (Ted Lasso 3x11 traía
+    /// inglés y francés): sin mirar este rótulo, se bajaba el francés.
+    static let rotuloLatino = "Spanish (Latin America)"
     static let agente = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                       + "(KHTML, like Gecko) Chrome/140.0 Safari/537.36"
 
     public struct Version: Equatable {
         public let nombre: String          // «ION10+OATH+SKEDADDLE+TRUMP»
+        public let idioma: String          // «Spanish (Latin America)», «French»…
         public let enlace: String          // «/original/159773/31»
         public let completa: Bool
         public let paraSordos: Bool
@@ -46,8 +51,10 @@ public enum Addic7ed {
                   let enlace = primera("href=\"(/(?:original|updated)/[^\"]+)\"", en: bloque)
             else { continue }
             let estado = primera("<b>\\s*(.*?)\\s*</b>", en: bloque) ?? ""
+            let idioma = primera("class=\"language\">\\s*([^<]*?)\\s*<", en: bloque) ?? ""
             resultado.append(Version(
                 nombre: nombre,
+                idioma: idioma,
                 enlace: enlace,
                 completa: estado.hasPrefix("Completed"),
                 paraSordos: bloque.contains("title=\"Hearing Impaired\""),
@@ -76,7 +83,7 @@ public enum Addic7ed {
 
         let fichas = Set(video.lastPathComponent.lowercased()
             .components(separatedBy: CharacterSet(charactersIn: ". _-[]")))
-        let candidatas = versiones(en: html).filter(\.completa)
+        let candidatas = versiones(en: html).filter { $0.completa && $0.idioma == rotuloLatino }
             .sorted { puntaje($0, fichas: fichas) > puntaje($1, fichas: fichas) }
 
         for version in candidatas {

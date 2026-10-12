@@ -1,3 +1,4 @@
+import SubFixKit
 import SwiftUI
 
 /// Puerta pública para que la herramienta de retratos pueda pintar cada pantalla
@@ -117,15 +118,23 @@ public enum Retratos {
     /// Una fila terminada y una pendiente, una sobre otra, para revisar la disposición.
     @MainActor
     public static func filasDeEjemplo() -> some View {
-        var lista = Fila(url: URL(fileURLWithPath: "/p/Unabomber.2026.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.GG - YTS.BZ].mkv"))
-        lista.estado = .hecha("MKV creado: Unabomber.2026.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.GG - YTS.BZ] (SubFix).mkv")
-        var pendiente = Fila(url: URL(fileURLWithPath: "/p/Otra.Pelicula.2025.1080p.WEB-DL.mkv"))
+        let base = "/p/Ted Lasso S03/Ted.Lasso."
+        var hecha = Fila(url: URL(fileURLWithPath: base + "S03E01.Smells.Like.Mean.Spirit.2160p.10bit.ATVP.WEB-DL.mkv"))
+        hecha.estado = .hecha("823 líneas · Ted Lasso S03E01 - [MarcusL].zip (CP1252)")
+        var pendiente = Fila(url: URL(fileURLWithPath: base + "S03E09.La.Locker.Room.Aux.Folles.2160p.10bit.ATVP.WEB-DL.mkv"))
         pendiente.estado = .listaParaProcesar
-        var avisada = Fila(url: URL(fileURLWithPath: "/p/Tercera.Pelicula.2024.mkv"))
-        avisada.estado = .avisada("no conseguí latino: dejé el de España · búscalo en Subdivx y arrastra aquí lo que bajes")
+        var conPlan = Fila(url: URL(fileURLWithPath: base + "S03E10.International.Break.2160p.10bit.ATVP.WEB-DL.mkv"))
+        conPlan.estado = .listaParaProcesar
+        conPlan.plan = PlanDeMKV(audios: [1], subtitulosDelArchivo: [], añadidos: [], nombre: nil,
+                                 idiomasDeAudio: [:], idiomasDeSubtitulo: [:], idiomasDeAñadidos: [:])
+        var españa = Fila(url: URL(fileURLWithPath: base + "S03E11.Mom.City.2160p.10bit.ATVP.WEB-DL.mkv"))
+        españa.estado = .avisada("sólo hay de España (OpenSubtitles) — no lo puse hasta que lo apruebes")
+        españa.candidatoEspaña = URL(fileURLWithPath: "/tmp/x.srt")
+        var fallada = Fila(url: URL(fileURLWithPath: "/p/Unabomber.2026.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.GG].mkv"))
+        fallada.estado = .fallada("ffmpeg: Invalid data found when processing input")
         return VStack(spacing: 0) {
-            ForEach([lista, pendiente, avisada]) { fila in
-                FilaDePelicula(fila: fila, preferirLatino: true, elegirPista: { _ in }, crearMKV: {})
+            ForEach([hecha, pendiente, conPlan, españa, fallada]) { fila in
+                FilaDePelicula(fila: fila, preferirLatino: true, extraerDelArchivo: false, acciones: .ninguna)
                     .padding(.horizontal, 14)
                 Divider()
             }

@@ -69,7 +69,11 @@ public final class Vigilante: ObservableObject {
                 continue
             }
 
-            let resultado = await Motor.procesar(video, opciones: Motor.Opciones(preferirLatino: true))
+            // Las mismas opciones que la pestaña Películas, salvo que aquí no hay a quién
+            // preguntarle: el de España se instala y se avisa.
+            let opciones = Motor.Opciones(usarRed: Ajustes.leer("usarRed", true), preferirLatino: true,
+                                          extraerDelArchivo: Ajustes.leer("extraerDelArchivo", false))
+            let resultado = await Motor.procesar(video, opciones: opciones)
             atendidos.insert(video.path)
             anotar(video, resultado)
         }

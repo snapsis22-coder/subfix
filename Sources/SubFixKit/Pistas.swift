@@ -8,17 +8,20 @@ public struct Pista: Identifiable, Hashable, Sendable {
     public let titulo: String?
     public let forzada: Bool
     public let paraSordos: Bool
+    /// La que el reproductor pone sola al abrir el archivo.
+    public let porDefecto: Bool
 
     public var id: Int { indice }
 
     public init(indice: Int, codec: String, idioma: String?, titulo: String?,
-                forzada: Bool, paraSordos: Bool) {
+                forzada: Bool, paraSordos: Bool, porDefecto: Bool = false) {
         self.indice = indice
         self.codec = codec
         self.idioma = idioma
         self.titulo = titulo
         self.forzada = forzada
         self.paraSordos = paraSordos
+        self.porDefecto = porDefecto
     }
 
     /// Códecs que son texto: se pueden convertir a SRT.
@@ -87,7 +90,7 @@ public enum Sondeo {
         let salida = try Herramientas.correr("ffprobe", [
             "-v", "error", "-select_streams", "s",
             "-show_entries",
-            "stream=index,codec_name:stream_tags=language,title:stream_disposition=forced,hearing_impaired",
+            "stream=index,codec_name:stream_tags=language,title:stream_disposition=forced,hearing_impaired,default",
             "-print_format", "json", url.path,
         ])
         guard salida.codigo == 0 else {
@@ -101,7 +104,8 @@ public enum Sondeo {
                   idioma: flujo.tags?["language"],
                   titulo: flujo.tags?["title"],
                   forzada: (flujo.disposition?["forced"] ?? 0) == 1,
-                  paraSordos: (flujo.disposition?["hearing_impaired"] ?? 0) == 1)
+                  paraSordos: (flujo.disposition?["hearing_impaired"] ?? 0) == 1,
+                  porDefecto: (flujo.disposition?["default"] ?? 0) == 1)
         }
     }
 
@@ -140,15 +144,18 @@ public struct PistaDeAudio: Identifiable, Hashable, Sendable {
     public let idioma: String?
     public let titulo: String?
     public let canales: Int?
+    public let porDefecto: Bool
 
     public var id: Int { indice }
 
-    public init(indice: Int, codec: String, idioma: String?, titulo: String?, canales: Int?) {
+    public init(indice: Int, codec: String, idioma: String?, titulo: String?, canales: Int?,
+                porDefecto: Bool = false) {
         self.indice = indice
         self.codec = codec
         self.idioma = idioma
         self.titulo = titulo
         self.canales = canales
+        self.porDefecto = porDefecto
     }
 
     public var sinIdioma: Bool { Idioma.estaSinEspecificar(idioma) }
@@ -158,6 +165,14 @@ public struct PistaDeAudio: Identifiable, Hashable, Sendable {
         return ["eng", "en", "english", "inglés", "ingles"].contains { termino in
             campos.range(of: "\\b\(termino)\\b", options: .regularExpression) != nil
         }
+    }
+
+    /// Doblaje latino: sólo si el título lo dice («Latino», «Latin America», «LAT»).
+    /// Una pista «spa» sin título puede ser de España: el audio no se puede leer para saberlo.
+    public var esLatino: Bool {
+        let campos = "\(idioma ?? "") \(titulo ?? "")"
+        return campos.range(of: "latin|americ|mexic|\\blat\\b|es-419",
+                            options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     public var resumen: String {
@@ -176,6 +191,7 @@ extension Sondeo {
             let codec_name: String?
             let channels: Int?
             let tags: [String: String]?
+            let disposition: [String: Int]?
         }
         let streams: [Flujo]?
     }
@@ -183,7 +199,7 @@ extension Sondeo {
     public static func audios(de url: URL) throws -> [PistaDeAudio] {
         let salida = try Herramientas.correr("ffprobe", [
             "-v", "error", "-select_streams", "a",
-            "-show_entries", "stream=index,codec_name,channels:stream_tags=language,title",
+            "-show_entries", "stream=index,codec_name,channels:stream_tags=language,title:stream_disposition=default",
             "-print_format", "json", url.path,
         ])
         guard salida.codigo == 0 else {
@@ -192,7 +208,8 @@ extension Sondeo {
         let respuesta = try JSONDecoder().decode(RespuestaAudio.self, from: Data(salida.texto.utf8))
         return (respuesta.streams ?? []).map {
             PistaDeAudio(indice: $0.index, codec: $0.codec_name ?? "desconocido",
-                         idioma: $0.tags?["language"], titulo: $0.tags?["title"], canales: $0.channels)
+                         idioma: $0.tags?["language"], titulo: $0.tags?["title"], canales: $0.channels,
+                         porDefecto: ($0.disposition?["default"] ?? 0) == 1)
         }
     }
 }

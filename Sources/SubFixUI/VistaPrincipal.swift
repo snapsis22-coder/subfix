@@ -41,9 +41,25 @@ public struct VistaPrincipal: View {
             }
         }
         .frame(minWidth: 760, minHeight: 460)
+        .onAppear(perform: cargarDesdeArgumentos)
         .overlay(alignment: .bottom) {
             if let mensaje = cola.mensajeDeHerramientas {
                 AvisoDeHerramientas(mensaje: mensaje)
+            }
+        }
+    }
+
+    /// `open -a SubFix --env SUBFIX_CARGAR="/ruta/uno:/ruta/dos"` arranca con eso ya en la lista.
+    /// (Rutas como argumentos no sirven: macOS las toma por documentos y no abre la ventana.)
+    private func cargarDesdeArgumentos() {
+        guard let lista = ProcessInfo.processInfo.environment["SUBFIX_CARGAR"] else { return }
+        let rutas = lista.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
+        if !rutas.isEmpty { cola.agregar(rutas) }
+        // Con SUBFIX_SUBDIVX=1 además abre la ventana de Subdivx con todo lo cargado (para revisarla).
+        if ProcessInfo.processInfo.environment["SUBFIX_SUBDIVX"] == "1" {
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                cola.abrirSubdivxCon = cola.filas.map(\.id)
             }
         }
     }
@@ -55,31 +71,51 @@ struct VistaPeliculas: View {
     @ObservedObject var cola: Cola
     @State private var encima = false
     @State private var paraMKV: Fila?
+    @State private var paraSubdivx: LoteSubdivx?
+    @State private var filtro = Filtro.todas
+
+    enum Filtro: String, CaseIterable, Identifiable {
+        case todas = "Todas"
+        case porRevisar = "Por revisar"
+        case listas = "Listas"
+        var id: Self { self }
+    }
+
+    /// Los capítulos se agrupan por serie y temporada; las películas, aparte.
+    private var grupos: [(titulo: String, filas: [Fila])] {
+        let visibles = cola.filas.filter { fila in
+            switch filtro {
+            case .todas: return true
+            case .porRevisar: return fila.porRevisar
+            case .listas: return fila.terminada
+            }
+        }
+        var orden: [String] = []
+        var porGrupo: [String: [Fila]] = [:]
+        for fila in visibles {
+            let grupo = fila.visible.grupo
+            if porGrupo[grupo] == nil { orden.append(grupo) }
+            porGrupo[grupo, default: []].append(fila)
+        }
+        return orden.map { grupo in
+            (grupo, porGrupo[grupo]!.sorted { $0.visible.orden < $1.visible.orden })
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if cola.filas.isEmpty {
                 ZonaVacia(encima: encima, explorar: explorar)
             } else {
-                List {
-                    ForEach(cola.filas) { fila in
-                        FilaDePelicula(fila: fila, preferirLatino: cola.preferirLatino && cola.usarRed,
-                                       elegirPista: { indice in cola.elegirPista(fila.id, indice: indice) },
-                                       crearMKV: { paraMKV = fila })
-                    }
-                }
-                .listStyle(.inset)
+                encabezado
+                Divider()
+                lista
             }
 
             if let aviso = cola.aviso {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(aviso).font(.callout)
-                    Spacer()
-                    Button("Cerrar") { cola.aviso = nil }.buttonStyle(.borderless)
-                }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(.orange.opacity(0.08))
+                Franja(texto: aviso, icono: "exclamationmark.triangle.fill", color: .orange) { cola.aviso = nil }
+            } else if let nota = cola.nota {
+                Franja(texto: nota, icono: "checkmark.circle.fill", color: .green) { cola.nota = nil }
             }
             Divider()
             barraInferior
@@ -95,6 +131,139 @@ struct VistaPeliculas: View {
                       alGuardar: { cola.guardarPlan(fila.id, $0) },
                       alCrear: { cola.mkvCreado(fila.id, $0) })
         }
+        .sheet(item: $paraSubdivx) { lote in
+            HojaDeSubdivx(lote: lote) { archivo, id in
+                if let id { return cola.adoptarDescarga(archivo, para: id) }
+                return cola.adoptarDescarga(archivo, entre: lote.trabajos.map(\.id))
+            }
+        }
+        // Al terminar de procesar, la cola pide Subdivx para los que quedaron sin latino.
+        .onChange(of: cola.abrirSubdivxCon) { _, ids in
+            guard let ids, paraSubdivx == nil, paraMKV == nil else { return }
+            buscarEnSubdivx(cola.filas.filter { ids.contains($0.id) })
+            cola.abrirSubdivxCon = nil
+        }
+    }
+
+    // MARK: Encabezado: resumen, filtro y opciones
+
+    private var encabezado: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(resumen).font(.headline)
+                Text(resumenDeOpciones).font(.caption).foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Picker("Mostrar", selection: $filtro) {
+                ForEach(Filtro.allCases) { f in
+                    Text(f == .porRevisar && cuantas(\.porRevisar) > 0
+                         ? "\(f.rawValue) (\(cuantas(\.porRevisar)))" : f.rawValue).tag(f)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+
+            menuDeOpciones
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func cuantas(_ condicion: KeyPath<Fila, Bool>) -> Int {
+        cola.filas.filter { $0[keyPath: condicion] }.count
+    }
+
+    private var resumen: String {
+        let capitulos = cola.filas.filter(\.esEpisodio).count
+        let peliculas = cola.filas.count - capitulos
+        let cosas = [capitulos > 0 ? (capitulos == 1 ? "1 capítulo" : "\(capitulos) capítulos") : nil,
+                     peliculas > 0 ? (peliculas == 1 ? "1 película" : "\(peliculas) películas") : nil]
+        var partes = [cosas.compactMap { $0 }.joined(separator: " y ")]
+        let listas = cuantas(\.terminada), revisar = cuantas(\.porRevisar), pendientes = cola.pendientes.count
+        if listas > 0 { partes.append("\(listas) list\(listas == 1 ? "o" : "os")") }
+        if revisar > 0 { partes.append("\(revisar) por revisar") }
+        if pendientes > 0 { partes.append("\(pendientes) pendiente\(pendientes == 1 ? "" : "s")") }
+        return partes.joined(separator: " · ")
+    }
+
+    /// Lo que va a hacer «Procesar», dicho en una línea.
+    private var resumenDeOpciones: String {
+        var partes: [String] = []
+        switch (cola.usarRed, cola.extraerDelArchivo) {
+        case (true, false): partes.append("Busca en internet")
+        case (true, true): partes.append("Busca en internet y extrae del archivo")
+        case (false, true): partes.append("Sólo extrae del archivo")
+        case (false, false): partes.append("⚠️ No busca en internet ni extrae: Procesar no hará nada")
+        }
+        if cola.preferirLatino { partes.append("sólo latino (España, si tú lo apruebas)") }
+        if cola.subdivxAlTerminar { partes.append("lo que falte, a Subdivx") }
+        if cola.organizar { partes.append("cada capítulo a su carpeta") }
+        return partes.joined(separator: " · ")
+    }
+
+    private var menuDeOpciones: some View {
+        Menu {
+            Section("Al procesar") {
+                Toggle("Buscar en internet (Addic7ed y OpenSubtitles)", isOn: $cola.usarRed)
+                Toggle("Extraer también la pista del archivo", isOn: $cola.extraerDelArchivo)
+                Toggle("Pedir latino: el de España sólo si lo apruebo", isOn: $cola.preferirLatino)
+            }
+            Section("Al terminar") {
+                Toggle("Buscar en Subdivx los que queden sin latino", isOn: $cola.subdivxAlTerminar)
+                Toggle("Meter cada capítulo en su carpeta", isOn: $cola.organizar)
+            }
+        } label: {
+            Label("Opciones", systemImage: "slider.horizontal.3")
+        }
+        .fixedSize()
+        .help("Qué hace «Procesar». Se recuerda para la próxima vez")
+    }
+
+    // MARK: Lista
+
+    private var lista: some View {
+        List {
+            ForEach(grupos, id: \.titulo) { grupo in
+                Section {
+                    ForEach(grupo.filas) { fila in
+                        FilaDePelicula(fila: fila,
+                                       preferirLatino: cola.preferirLatino && cola.usarRed,
+                                       extraerDelArchivo: cola.extraerDelArchivo,
+                                       acciones: acciones(para: fila))
+                            .contextMenu { MenuDeFila(fila: fila, acciones: acciones(para: fila)) }
+                    }
+                } header: {
+                    if grupos.count > 1 || grupo.titulo != "Películas" {
+                        Text(grupo.titulo)
+                    }
+                }
+            }
+            if grupos.isEmpty {
+                Text(filtro == .porRevisar ? "Nada por revisar." : "Todavía no hay nada listo.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 30)
+            }
+        }
+        .listStyle(.inset)
+    }
+
+    private func acciones(para fila: Fila) -> AccionesDeFila {
+        AccionesDeFila(
+            elegirPista: { cola.elegirPista(fila.id, indice: $0) },
+            abrirPistas: { paraMKV = fila },
+            abrirSubdivx: { buscarEnSubdivx([fila]) },
+            usarEspaña: { cola.usarEspaña(fila.id) },
+            reintentar: { cola.reintentar(fila.id) },
+            quitar: { cola.quitar(fila.id) })
+    }
+
+    private func buscarEnSubdivx(_ filas: [Fila]) {
+        guard !filas.isEmpty else { return }
+        paraSubdivx = LoteSubdivx(trabajos: filas.map(TrabajoSubdivx.init))
     }
 
     private func explorar() {
@@ -107,30 +276,65 @@ struct VistaPeliculas: View {
         if panel.runModal() == .OK { cola.agregar(panel.urls) }
     }
 
+    // MARK: Barra inferior
+
     private var barraInferior: some View {
-        HStack(spacing: 12) {
-            Toggle("Buscar en OpenSubtitles", isOn: $cola.usarRed)
-                .toggleStyle(.checkbox)
-                .help("Cuando la película no trae subtítulo de texto, se busca uno en internet")
+        HStack(spacing: 10) {
+            Button(action: explorar) {
+                Label("Añadir…", systemImage: "plus")
+            }
+            .keyboardShortcut("o", modifiers: .command)
+            .disabled(cola.trabajando)
+            .help("Elegir películas, carpetas o el .zip/.srt de Subdivx (⌘O). También puedes arrastrarlos")
 
-            Toggle("Preferir latino", isOn: $cola.preferirLatino)
-                .toggleStyle(.checkbox)
-                .help("En las series se busca primero el latino en Addic7ed. Si al final sólo hay "
-                      + "español de España o nada, la fila avisa en naranja para buscarlo en Subdivx")
+            if cola.filas.contains(where: \.esEpisodio) {
+                Button {
+                    cola.organizarTodos()
+                } label: {
+                    Label("Organizar en carpetas", systemImage: "folder.badge.plus")
+                }
+                .disabled(cola.trabajando || !cola.hayCapitulosPorOrganizar)
+                .help(cola.hayCapitulosPorOrganizar
+                      ? "Mete cada capítulo (video, .srt y MKV) en su carpeta, p. ej. «Ted Lasso S03E01». Nunca pisa nada"
+                      : "Todos los capítulos ya están en su carpeta")
+            }
 
-            Toggle("Carpeta por capítulo", isOn: $cola.organizar)
-                .toggleStyle(.checkbox)
-                .help("Mueve cada capítulo con su .srt a una subcarpeta propia, p. ej. «Ted Lasso S01E01»")
+            if !cola.filas.isEmpty {
+                Button {
+                    cola.extraerLatinoEnTodos()
+                } label: {
+                    Label("Extraer latino", systemImage: "text.bubble")
+                }
+                .disabled(cola.trabajando || cola.paraLatinoPorDefecto.isEmpty)
+                .help("En toda la lista: saca del archivo el subtítulo latino, lo limpia de publicidad y caracteres "
+                      + "raros, lo deja como .srt al lado (el que el TV pone solo) y mete cada capítulo en su carpeta. Sin internet")
+
+                Button {
+                    cola.latinoPorDefectoEnTodos()
+                } label: {
+                    Label("Latino por defecto", systemImage: "globe.americas")
+                }
+                .disabled(cola.trabajando || cola.paraLatinoPorDefecto.isEmpty)
+                .help("Sólo eso: en cada MKV de la lista deja automático el subtítulo latino y, si lo trae, "
+                      + "el audio latino. Cambia el mismo archivo (sólo la cabecera, en un segundo); no crea otro")
+            }
+
+            if !cola.faltanEnSubdivx.isEmpty {
+                Button {
+                    buscarEnSubdivx(cola.faltanEnSubdivx)
+                } label: {
+                    Label("Subdivx (\(cola.faltanEnSubdivx.count))", systemImage: "magnifyingglass")
+                }
+                .disabled(cola.trabajando)
+                .help("Abre Subdivx y baja, uno por uno, el latino de los que quedaron en naranja")
+            }
 
             Spacer()
 
-            Button("Explorar…", action: explorar)
-                .disabled(cola.trabajando)
-                .help("Elegir películas, carpetas o el .zip/.srt de Subdivx sin arrastrar")
-
             if !cola.filas.isEmpty {
-                Button("Vaciar") { cola.vaciar() }
+                Button("Vaciar lista") { cola.vaciar() }
                     .disabled(cola.trabajando)
+                    .help("Quita todo de la lista. No toca ningún archivo")
             }
 
             Button {
@@ -142,15 +346,34 @@ struct VistaPeliculas: View {
                         Text("Procesando…")
                     }
                 } else {
-                    Text(cola.pendientes.isEmpty
-                         ? "Procesar"
-                         : "Procesar \(cola.pendientes.count) película\(cola.pendientes.count == 1 ? "" : "s")")
+                    Text(cola.pendientes.isEmpty ? "Procesar" : "Procesar \(cola.pendientes.count)")
+                        .frame(minWidth: 80)
                 }
             }
             .keyboardShortcut(.defaultAction)
+            .controlSize(.large)
             .disabled(cola.pendientes.isEmpty || cola.trabajando)
         }
         .padding(12)
+    }
+}
+
+/// Franja de aviso (naranja) o de nota (verde) sobre la barra inferior.
+struct Franja: View {
+    let texto: String
+    let icono: String
+    let color: Color
+    let cerrar: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icono).foregroundStyle(color)
+            Text(texto).font(.callout).lineLimit(3)
+            Spacer()
+            Button("Cerrar", action: cerrar).buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(color.opacity(0.08))
     }
 }
 
@@ -163,14 +386,14 @@ struct ZonaVacia: View {
             Image(systemName: "film.stack")
                 .font(.system(size: 46, weight: .light))
                 .foregroundStyle(encima ? Color.accentColor : .secondary)
-            Text("Arrastra películas o una carpeta")
+            Text("Arrastra películas, capítulos o una carpeta")
                 .font(.title3)
-            Text("Deja el .srt listo para el Samsung: mismo nombre, UTF-8 con BOM y CRLF.\n"
-                 + "También acepta el .zip, .rar o .srt que bajes de Subdivx.")
+            Text("SubFix busca el subtítulo en español latino y lo deja listo para el Samsung:\n"
+                 + "mismo nombre que el video, UTF-8 con BOM y CRLF.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("Explorar…", action: explorar)
+            Button("Añadir…", action: explorar)
                 .controlSize(.large)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -183,14 +406,32 @@ struct ZonaVacia: View {
     }
 }
 
+/// Lo que se puede hacer con una fila, para la propia fila, su menú «⋯» y el clic derecho.
+public struct AccionesDeFila {
+    var elegirPista: (Int) -> Void = { _ in }
+    var abrirPistas: () -> Void = {}
+    var abrirSubdivx: () -> Void = {}
+    var usarEspaña: () -> Void = {}
+    var reintentar: () -> Void = {}
+    var quitar: () -> Void = {}
+
+    static let ninguna = AccionesDeFila()
+}
+
 struct FilaDePelicula: View {
     let fila: Fila
     let preferirLatino: Bool
-    let elegirPista: (Int) -> Void
-    let crearMKV: () -> Void
+    let extraerDelArchivo: Bool
+    let acciones: AccionesDeFila
+
+    private var detalle: String {
+        fila.estado.detalle ?? fila.plan?.resumen
+            ?? fila.diagnostico?.plan(preferirLatino: preferirLatino, extraerDelArchivo: extraerDelArchivo,
+                                     pistaManual: fila.pistaElegida != nil) ?? ""
+    }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             Image(systemName: fila.estado.icono)
                 .foregroundStyle(fila.estado.color)
                 .font(.title3)
@@ -198,19 +439,24 @@ struct FilaDePelicula: View {
                 .symbolEffect(.pulse, isActive: fila.estado == .procesando)
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 10) {
-                    Text(fila.nombre)
+                HStack(spacing: 8) {
+                    if let codigo = fila.visible.codigo {
+                        Text(codigo)
+                            .font(.callout.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(fila.visible.titulo.isEmpty ? fila.nombre : fila.visible.titulo)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .help(fila.url.path)
                     if fila.terminada { SelloListo().id(fila.id) }
                 }
+                .help(fila.url.path)
 
-                Text(fila.estado.detalle ?? fila.plan?.resumen
-                     ?? fila.diagnostico?.plan(preferirLatino: preferirLatino) ?? "")
+                Text(detalle)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(fila.porRevisar ? AnyShapeStyle(fila.estado.color) : AnyShapeStyle(.secondary))
                     .lineLimit(2)
+                    .help(detalle)
 
                 if fila.estado == .procesando, let avance = fila.progreso {
                     BarraVerde(fraccion: avance, inicio: fila.inicioDeProgreso)
@@ -219,78 +465,107 @@ struct FilaDePelicula: View {
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
-            if case .avisada = fila.estado {
-                Button {
-                    buscarEnSubdivx()
+            botonesPrincipales
+
+            if fila.estado != .procesando, fila.estado != .analizando {
+                Menu {
+                    MenuDeFila(fila: fila, acciones: acciones)
                 } label: {
-                    Label("Subdivx", systemImage: "magnifyingglass")
+                    Image(systemName: "ellipsis.circle")
                 }
-                .help("Abre Subdivx y copia «\(Motor.busquedaSubdivx(para: fila.url))» para pegarla en el buscador. "
-                      + "Luego arrastra aquí lo que bajes")
-            }
-
-            if !fila.terminada, fila.avisa || fila.estado == .listaParaProcesar || fila.plan != nil {
-                Button(action: crearMKV) {
-                    Label(fila.plan == nil ? "Pistas…" : "Pistas ✓", systemImage: "slider.horizontal.3")
-                }
-                .help("Elige qué audios y subtítulos van en un MKV nuevo (puedes añadir un .srt). "
-                      + "«Procesar» lo crea; el original no se toca")
-            }
-
-            if let diagnostico = fila.diagnostico, diagnostico.pistas.filter(\.esTexto).count > 1,
-               fila.estado == .listaParaProcesar {
-                selectorDePista(diagnostico)
-            }
-
-            if fila.terminada {
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([archivoParaMostrar])
-                } label: {
-                    Label("Mostrar", systemImage: "folder")
-                }
-                .help("Mostrar «\(archivoParaMostrar.lastPathComponent)» en el Finder")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Más acciones")
             }
         }
         .padding(.vertical, 4)
         .frame(minHeight: 54)   // sitio para que el sello llegue grande sin que la fila lo recorte
     }
 
-    /// El MKV recién creado; si no hubo, el .srt que quedó junto a la película; si tampoco, la película.
-    private var archivoParaMostrar: URL {
-        if let listo = fila.archivoListo, FileManager.default.fileExists(atPath: listo.path) { return listo }
-        let srt = Motor.destinoSRT(de: fila.url)
-        return FileManager.default.fileExists(atPath: srt.path) ? srt : fila.url
+    /// Como mucho dos botones a la vista: lo que toca hacer ahora con esta fila.
+    @ViewBuilder private var botonesPrincipales: some View {
+        switch fila.estado {
+        case .avisada:
+            if fila.candidatoEspaña != nil {
+                Button("Usar el de España", action: acciones.usarEspaña)
+                    .help("Sólo apareció en español de España. Todavía no está puesto: con este botón lo dejas junto al video")
+            }
+            Button(action: acciones.abrirSubdivx) {
+                Label("Subdivx", systemImage: "magnifyingglass")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .help("Abre Subdivx dentro de SubFix, busca «\(TrabajoSubdivx(fila: fila).busqueda)» y baja solo el latino. "
+                  + "Si sale «Verifica que eres humano», márcalo tú")
+        case .fallada:
+            Button(action: acciones.reintentar) {
+                Label("Reintentar", systemImage: "arrow.clockwise")
+            }
+            .help("Vuelve a dejarla pendiente para el próximo «Procesar»")
+        case .hecha:
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([fila.archivoParaMostrar])
+            } label: {
+                Label("Mostrar", systemImage: "folder")
+            }
+            .help("Mostrar «\(fila.archivoParaMostrar.lastPathComponent)» en el Finder")
+        case .listaParaProcesar where fila.plan != nil:
+            Button(action: acciones.abrirPistas) {
+                Label("Pistas ✓", systemImage: "slider.horizontal.3")
+            }
+            .help("Ya armaste el MKV de esta fila: «Procesar» lo crea. Toca para cambiarlo")
+        default:
+            EmptyView()
+        }
     }
+}
 
-    /// Subdivx no deja que un programa busque por su cuenta (Cloudflare), así que
-    /// la búsqueda la hace el usuario: se le deja copiada y se abre la página.
-    private func buscarEnSubdivx() {
-        let tablero = NSPasteboard.general
-        tablero.clearContents()
-        tablero.setString(Motor.busquedaSubdivx(para: fila.url), forType: .string)
-        NSWorkspace.shared.open(URL(string: "https://www.subdivx.com/")!)
-    }
+/// Todas las acciones de una fila; lo usan el botón «⋯» y el clic derecho.
+struct MenuDeFila: View {
+    let fila: Fila
+    let acciones: AccionesDeFila
 
-    /// Cuando hay varias pistas de texto se puede cambiar la elegida: es la
-    /// decisión que el motor no debería tomar solo.
-    private func selectorDePista(_ diagnostico: Motor.Diagnostico) -> some View {
-        Menu {
-            ForEach(diagnostico.pistas.filter(\.esTexto)) { pista in
-                Button {
-                    elegirPista(pista.indice)
-                } label: {
-                    let elegida = (fila.pistaElegida ?? diagnostico.elegida?.indice) == pista.indice
-                    Label(pista.resumen, systemImage: elegida ? "checkmark" : "")
+    var body: some View {
+        if !fila.terminada, fila.estado != .procesando {
+            Button(fila.plan == nil ? "Pistas del MKV…" : "Cambiar las pistas del MKV…", action: acciones.abrirPistas)
+        }
+        if let diagnostico = fila.diagnostico, diagnostico.pistas.filter(\.esTexto).count > 1,
+           fila.estado == .listaParaProcesar {
+            Menu("Extraer esta pista") {
+                ForEach(diagnostico.pistas.filter(\.esTexto)) { pista in
+                    Button {
+                        acciones.elegirPista(pista.indice)
+                    } label: {
+                        let elegida = fila.pistaElegida == pista.indice
+                        Label(pista.resumen, systemImage: elegida ? "checkmark" : "")
+                    }
                 }
             }
-        } label: {
-            Label("Pista", systemImage: "captions.bubble")
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Elegir otra pista de subtítulos")
+        Button("Buscar en Subdivx…", action: acciones.abrirSubdivx)
+        if fila.candidatoEspaña != nil {
+            Button("Usar el de España", action: acciones.usarEspaña)
+        }
+        if fila.porRevisar {
+            Button("Volver a procesar", action: acciones.reintentar)
+        }
+        Divider()
+        Button("Mostrar en el Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([fila.archivoParaMostrar])
+        }
+        Button("Quitar de la lista", action: acciones.quitar)
+    }
+}
+
+extension Fila {
+    /// El MKV recién creado; si no hubo, el .srt que quedó junto al video; si tampoco, el video.
+    var archivoParaMostrar: URL {
+        if let listo = archivoListo, FileManager.default.fileExists(atPath: listo.path) { return listo }
+        let srt = Motor.destinoSRT(de: url)
+        return FileManager.default.fileExists(atPath: srt.path) ? srt : url
     }
 }
 

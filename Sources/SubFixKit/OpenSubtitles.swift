@@ -87,7 +87,9 @@ public enum OpenSubtitles {
         let MatchedBy: String?
     }
 
-    public static func buscar(para video: URL) async -> Hallazgo? {
+    /// Con `preferirLatino`, si el mejor resulta de España se prueban unos cuantos
+    /// más buscando uno latino; si no aparece, se devuelve el de España.
+    public static func buscar(para video: URL, preferirLatino: Bool = false) async -> Hallazgo? {
         let atributos = try? FileManager.default.attributesOfItem(atPath: video.path)
         let tamaño = (atributos?[.size] as? Int) ?? 0
         let (titulo, temporada, episodio) = tituloLimpio(video)
@@ -111,24 +113,30 @@ public enum OpenSubtitles {
         let fichas = Set(video.lastPathComponent.lowercased()
             .components(separatedBy: CharacterSet(charactersIn: ". _-")))
 
+        var deEspaña: Hallazgo?
         for intento in intentos {
             guard let resultados = try? await pedir(intento.ruta), !resultados.isEmpty else { continue }
             let validos = resultados.filter { ["srt", "ass", "ssa"].contains(($0.SubFormat ?? "srt").lowercased()) }
-            guard let mejor = validos.max(by: { puntaje($0, fichas) < puntaje($1, fichas) }) else { continue }
+                .sorted { puntaje($0, fichas) > puntaje($1, fichas) }
 
             // Sin hash, exigir que el nombre del subtítulo comparta una palabra
             // larga del título; si no, es otra película.
-            if !intento.porHash, !palabrasDelTitulo.isEmpty {
-                let nombreSub = (mejor.SubFileName ?? "").lowercased()
-                guard palabrasDelTitulo.contains(where: { nombreSub.contains($0) }) else { continue }
+            let aceptables = validos.filter { r in
+                guard !intento.porHash, !palabrasDelTitulo.isEmpty else { return true }
+                let nombreSub = (r.SubFileName ?? "").lowercased()
+                return palabrasDelTitulo.contains(where: { nombreSub.contains($0) })
             }
-            guard let enlace = mejor.SubDownloadLink, let texto = try? await descargar(enlace),
-                  TextoSRT.esSRT(texto), TextoSRT.pareceEspañol(texto) else { continue }
-            return Hallazgo(texto: texto,
-                            nombreDelArchivo: mejor.SubFileName ?? "subtítulo",
-                            porHash: intento.porHash)
+            for candidato in aceptables.prefix(preferirLatino ? 4 : 1) {
+                guard let enlace = candidato.SubDownloadLink, let texto = try? await descargar(enlace),
+                      TextoSRT.esSRT(texto), TextoSRT.pareceEspañol(texto) else { continue }
+                let hallazgo = Hallazgo(texto: texto,
+                                        nombreDelArchivo: candidato.SubFileName ?? "subtítulo",
+                                        porHash: intento.porHash)
+                guard preferirLatino, TextoSRT.pareceDeEspaña(texto) else { return hallazgo }
+                if deEspaña == nil { deEspaña = hallazgo }
+            }
         }
-        return nil
+        return deEspaña
     }
 
     private static func puntaje(_ r: Resultado, _ fichas: Set<String>) -> Double {

@@ -34,9 +34,11 @@ Para cada película busca subtítulo en español en tres niveles y se queda con 
 
 **Preferir latino.** Los capítulos de series (los que llevan `S01E01` en el nombre) suelen traer incrustado solo el español de España. Con la casilla *Preferir latino* activada, antes que la pista incrustada se busca el español latino en **Addic7ed**, eligiendo la versión que más se parece al nombre de tu archivo, que es la que va sincronizada. Lo que se descarga se comprueba: si en realidad está en inglés (a veces lo suben mal etiquetado), se descarta.
 
-**Avisa cuando no hay latino.** SubFix reconoce el español de España por el *vosotros* («sois», «os», «tenéis»). Si una película o capítulo se queda solo con ese, o sin nada, la fila se pone en naranja y aparece el botón **Subdivx**: abre la página y deja copiada la búsqueda («Ted Lasso S01E02») para pegarla. Mientras tanto se deja puesto el de España, que es mejor que nada. La vigilancia de carpeta avisa lo mismo con una notificación.
+**El de España, solo si tú lo apruebas.** SubFix reconoce el español de España por el *vosotros* («sois», «os», «tenéis»). Si para una película o capítulo solo aparece ese, no lo pone: la fila se queda en naranja con el botón **Usar el de España**, por si lo prefieres a nada. Lo mismo comprueba el idioma de verdad: un subtítulo en inglés o en francés mal etiquetado como latino se descarta.
 
-**Arrastra lo que bajes de Subdivx.** El `.zip`, `.rar` o `.srt` se suelta en la ventana: SubFix lo abre (también los `.zip` con nombres en la codificación vieja de DOS, tan comunes en Subdivx), empareja cada subtítulo con su capítulo por el `S01E02`, elige el latino si vienen los dos, lo limpia, lo deja con el nombre del video y lo mete en su carpeta.
+**Subdivx dentro de la app.** Para los que quedan sin latino, el botón **Subdivx** abre el sitio en una ventana de SubFix, a la vista. La verificación de Cloudflare la pasas tú si la pide; después SubFix busca cada capítulo o película (con el año, para no confundir películas con el mismo nombre), elige el subtítulo latino, lo baja, lo limpia y lo deja puesto, uno tras otro. Con la opción *Buscar en Subdivx los que queden sin latino*, esa ventana se abre sola al terminar de procesar.
+
+**También puedes arrastrar lo que bajes de Subdivx.** El `.zip`, `.rar` o `.srt` se suelta en la ventana: SubFix lo abre (también los `.zip` con nombres en la codificación vieja de DOS, tan comunes en Subdivx), empareja cada subtítulo con su capítulo por el `S01E02`, elige el latino si vienen los dos, lo limpia, lo deja con el nombre del video y lo mete en su carpeta.
 
 Además:
 
@@ -49,11 +51,15 @@ Además:
 
 **Pistas del MKV.** El botón **Pistas…** de cada película abre una hoja para armar un `.mkv` nuevo a tu medida: qué audios se quedan, qué subtítulos del archivo se conservan, qué `.srt`, `.zip` o `.rar` se añaden (por ejemplo el de Subdivx), cómo se llama el archivo y en qué idioma se rotula cada pista, con una lista desplegable de idiomas. Cada subtítulo del archivo tiene su botón **Extraer .srt** por si lo quieres suelto. Puedes guardarlo como plan —**Procesar** lo ejecuta, sin dejar ningún `.srt` suelto— o crearlo en el acto, con una barra de progreso verde. No recodifica nada (copia el video y el audio tal cual, y conserva capítulos y adjuntos), conserva las marcas de tiempo del video y **nunca toca ni pisa el original**: si el nombre ya existe, añade «(2)». Al terminar, la fila muestra un sello verde y el botón **Mostrar**. Sirve, por ejemplo, para quitar un audio sobrante o para bajar las 38 pistas de un capítulo por debajo del límite que aguanta el televisor.
 
+**Extraer latino.** Un botón para toda la lista que hace solo esto, sin internet: saca del propio archivo el subtítulo latino, lo limpia (publicidad, etiquetas, caracteres raros) y lo deja como `.srt` junto al video, que es el que el televisor pone solo. Al terminar mete cada capítulo en su carpeta. Si ya había un `.srt`, se aparta como `.srt.anterior`; si el archivo solo trae el de España, no lo pone sin preguntarte.
+
+**Latino por defecto.** Otro botón para toda la lista: deja como automático el subtítulo latino que el MKV trae dentro y, solo si el archivo trae doblaje latino, también ese audio. No crea otro archivo ni reescribe el video: cambia únicamente la marca «por defecto» de cada pista en la cabecera del MKV, como `mkvpropedit`, en un segundo y sin ocupar espacio. Antes guarda una copia de esos bytes en `~/Library/Application Support/SubFix/Cabeceras/` y, al terminar, vuelve a leer el archivo para comprobar que quedó bien; si no, lo deja como estaba. Funciona con los MKV de mkvmerge, que es como llegan casi todas las descargas; si a un archivo no le queda espacio libre en la cabecera, avisa y no lo toca.
+
 ## Cómo se usa
 
-**Películas** — arrastras archivos o una carpeta entera, o los eliges con **Explorar…**. Antes de tocar nada te muestra qué piensa hacer con cada una, y si hay varias pistas de texto puedes cambiar la elegida.
+**Películas** — arrastras archivos o una carpeta entera (también lee sus subcarpetas, por si la temporada ya está organizada por capítulo), o los eliges con **Añadir…** (⌘O). La lista se agrupa por serie y temporada, y antes de tocar nada te muestra qué piensa hacer con cada una. **Procesar** busca el latino en internet; para sacarlo también de la pista del archivo, enciende *Extraer del archivo* en el menú **Opciones**, que recuerda lo que elijas.
 
-Con *Carpeta por capítulo* activada, cada capítulo se mueve con su `.srt` a una subcarpeta propia (`Ted Lasso S01E01/`). Dentro del mismo disco es un renombrado instantáneo, solo se mueve lo que quedó con subtítulo y nunca se pisa nada.
+**Organizar en carpetas** mete cada capítulo con su `.srt` en una subcarpeta propia (`Ted Lasso S01E01/`), y lo mismo hace *Carpeta por capítulo* en **Opciones** al terminar de procesar. Dentro del mismo disco es un renombrado instantáneo y nunca se pisa nada.
 
 **Vigilar carpeta** — le señalas tu carpeta de descargas y se encarga sola. Repasa cada 30 segundos, espera a que el archivo deje de crecer para no procesar una descarga a medias, y avisa con una notificación.
 
