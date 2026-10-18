@@ -351,6 +351,13 @@ probar("prefiere la latina sobre la forzada y la de sordos") {
     Sondeo.mejor(entre: [sorda, forzada, latina])?.elegida.indice == 4
 }
 
+probar("«Español (México)» con tilde cuenta como latino, en subtítulo y en audio (MobLand 14-oct)") {
+    let mexico = Pista(indice: 5, codec: "subrip", idioma: "spa", titulo: "Español (México)", forzada: false, paraSordos: false)
+    let españa = Pista(indice: 6, codec: "subrip", idioma: "spa", titulo: "Español (España)", forzada: false, paraSordos: false)
+    let audio = PistaDeAudio(indice: 1, codec: "eac3", idioma: "spa", titulo: "Español (México)", canales: 6)
+    return mexico.esLatino && !españa.esLatino && audio.esLatino
+}
+
 probar("reconoce el español y descarta el inglés") {
     latina.esEspañol && sorda.esEspañol && !inglesa.esEspañol
 }

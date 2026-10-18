@@ -62,6 +62,15 @@ public struct Idioma: Hashable, Sendable, Identifiable {
         guard let codigo = codigo?.lowercased() else { return true }
         return codigo.isEmpty || codigo == "und" || codigo == "unk"
     }
+
+    /// ¿El rótulo dice latino? «Latin America», «Latinoamérica», «Español (México)», «es-419».
+    /// Se compara sin tildes: con ellas «México» no contenía «mexic» (MobLand, 14-oct).
+    /// `tambienLat` acepta la sigla suelta «LAT» (en audios es como suelen rotularlo).
+    static func diceLatino(_ texto: String, tambienLat: Bool = false) -> Bool {
+        let plano = texto.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+        let patron = "latin|americ|mexic|es-419|es-mx" + (tambienLat ? "|\\blat\\b" : "")
+        return plano.range(of: patron, options: .regularExpression) != nil
+    }
 }
 
 /// Lo que el usuario dejó armado para el MKV de una película: qué audios, qué

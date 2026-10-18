@@ -41,9 +41,9 @@ public struct Pista: Identifiable, Hashable, Sendable {
         }
     }
 
-    var esLatino: Bool {
+    public var esLatino: Bool {
         guard let titulo else { return false }
-        return titulo.range(of: "latin|americ|mexic", options: [.regularExpression, .caseInsensitive]) != nil
+        return Idioma.diceLatino(titulo)
     }
 
     var descartable: Bool {
@@ -170,9 +170,7 @@ public struct PistaDeAudio: Identifiable, Hashable, Sendable {
     /// Doblaje latino: sólo si el título lo dice («Latino», «Latin America», «LAT»).
     /// Una pista «spa» sin título puede ser de España: el audio no se puede leer para saberlo.
     public var esLatino: Bool {
-        let campos = "\(idioma ?? "") \(titulo ?? "")"
-        return campos.range(of: "latin|americ|mexic|\\blat\\b|es-419",
-                            options: [.regularExpression, .caseInsensitive]) != nil
+        Idioma.diceLatino("\(idioma ?? "") \(titulo ?? "")", tambienLat: true)
     }
 
     public var resumen: String {
