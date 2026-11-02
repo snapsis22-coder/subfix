@@ -89,8 +89,13 @@ public final class Actualizaciones: ObservableObject {
                                                                 comparandoCon: instalada)
                 try Actualizador.instalar(nueva, en: instalada)
             }.value
-            Actualizador.relanzar(instalada)
-            NSApp.terminate(nil)
+            // La nueva se abre como otra instancia y, cuando ya arrancó, esta se cierra.
+            // (Con `sleep; open` desde un proceso hijo la 1.7.0 no siempre se reabría.)
+            let configuracion = NSWorkspace.OpenConfiguration()
+            configuracion.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: instalada, configuration: configuracion) { _, _ in
+                DispatchQueue.main.async { NSApp.terminate(nil) }
+            }
         } catch {
             estado = .fallo(error.localizedDescription)
         }
