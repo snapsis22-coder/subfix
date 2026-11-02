@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SubFixKit
 import SwiftUI
@@ -46,10 +47,10 @@ public struct Fila: Identifiable, Equatable {
 
         var color: Color {
             switch self {
-            case .analizando, .procesando, .listaParaProcesar: return .secondary
-            case .hecha: return .green
-            case .avisada: return .orange
-            case .fallada: return .red
+            case .analizando, .procesando, .listaParaProcesar: return Tema.tintaSuave
+            case .hecha: return Tema.verde
+            case .avisada: return Tema.ambar
+            case .fallada: return Tema.rojo
             }
         }
 
@@ -354,8 +355,79 @@ public final class Cola: ObservableObject {
 
     /// Quita la fila de la lista. No toca ningún archivo.
     public func quitar(_ id: UUID) {
-        guard filas.first(where: { $0.id == id })?.estado != .procesando else { return }
+        guard let fila = filas.first(where: { $0.id == id }), fila.estado != .procesando else { return }
+        descartadas.insert(fila.url.standardizedFileURL)
         filas.removeAll { $0.id == id }
+    }
+
+    // MARK: Descargas
+
+    /// Lo que el usuario quitó a mano: revisar Descargas no lo vuelve a traer (en esta sesión).
+    private var descartadas: Set<URL> = []
+    /// Lo que entró solo desde Descargas, para soltarlo si Organizar se lo lleva.
+    private var desdeDescargas: Set<URL> = []
+
+    /// La carpeta que «Subtítulos» revisa sola, si el usuario eligió una.
+    /// Sin elegir (nil) usa la misma entrada de «Organizar».
+    @Published public private(set) var carpetaPropia: URL? =
+        Ajustes.almacen.string(forKey: "subfix.descargas").map(URL.init(fileURLWithPath:)) {
+        didSet { Ajustes.almacen.set(carpetaPropia?.path, forKey: "subfix.descargas") }
+    }
+
+    /// Trae a la lista los videos de la carpeta de descargas (la propia o, si no hay,
+    /// `porDefecto`, la de «Organizar»).
+    /// Sólo videos: un .srt suelto ahí no se adopta solo. Salta lo que aún se está
+    /// bajando, los «sample» y lo que el usuario ya quitó. Si un video que vino de
+    /// aquí ya no está (lo movió Organizar) y no se está procesando, sale de la lista.
+    public func revisarDescargas(_ porDefecto: URL?) {
+        guard let carpeta = carpetaPropia ?? porDefecto else { return }
+        filas.removeAll { fila in
+            desdeDescargas.contains(fila.url.standardizedFileURL) && fila.estado != .procesando
+                && !FileManager.default.fileExists(atPath: fila.url.path)
+        }
+        let contenido = (try? FileManager.default.contentsOfDirectory(
+            at: carpeta, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        let completas = contenido.filter { !Organizador.aMedioBajar($0) }
+        let yaEstan = Set(filas.map { $0.url.standardizedFileURL })
+        let nuevas = Motor.videos(en: completas)
+            .map(\.standardizedFileURL)
+            .filter { !yaEstan.contains($0) && !descartadas.contains($0) }
+            .filter { !$0.deletingPathExtension().lastPathComponent.lowercased().contains("sample") }
+            .map(Fila.init)
+        desdeDescargas.formUnion(nuevas.map(\.url))
+        filas.append(contentsOf: nuevas)
+        for fila in nuevas { analizar(fila.id, fila.url) }
+    }
+
+    /// Abre el selector para cambiar la carpeta que se revisa sola.
+    public func elegirCarpetaDeDescargas(porDefecto: URL?) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Elegir"
+        panel.message = "¿Qué carpeta reviso para buscar películas y series sin subtítulo?"
+        panel.directoryURL = carpetaPropia ?? porDefecto
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        cambiarCarpeta(a: url, porDefecto: porDefecto)
+    }
+
+    /// Vuelve a revisar la misma carpeta que «Organizar».
+    public func usarLaDeOrganizar(_ porDefecto: URL?) {
+        cambiarCarpeta(a: nil, porDefecto: porDefecto)
+    }
+
+    /// Al cambiar de carpeta, lo que entró solo de la anterior y aún no se ha tocado
+    /// sale de la lista (los archivos no se tocan); lo hecho o en marcha se queda.
+    private func cambiarCarpeta(a nueva: URL?, porDefecto: URL?) {
+        carpetaPropia = nueva
+        let raiz = (nueva ?? porDefecto)?.standardizedFileURL.path ?? ""
+        filas.removeAll { fila in
+            let ruta = fila.url.standardizedFileURL
+            let sinTocar = (fila.estado == .analizando || fila.estado == .listaParaProcesar) && fila.plan == nil
+            return desdeDescargas.contains(ruta) && sinTocar && !ruta.path.hasPrefix(raiz + "/")
+        }
+        revisarDescargas(porDefecto)
     }
 
     /// Una fila que falló vuelve a quedar pendiente (conserva su plan de MKV, si lo tenía).
@@ -402,6 +474,7 @@ public final class Cola: ObservableObject {
     }
 
     public func vaciar() {
+        descartadas.formUnion(filas.filter { $0.estado != .procesando }.map { $0.url.standardizedFileURL })
         filas.removeAll()
     }
 

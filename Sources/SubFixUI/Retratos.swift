@@ -1,3 +1,4 @@
+import OrganizarKit
 import SubFixKit
 import SwiftUI
 
@@ -5,14 +6,59 @@ import SwiftUI
 /// por separado, sin volver públicas las vistas ni abrir una ventana de verdad.
 public enum Retratos {
 
+    /// La ventana entera en la pestaña de subtítulos.
     @MainActor
     public static func peliculas(_ cola: Cola) -> some View {
-        VistaPeliculas(cola: cola)
+        Ventana(pestaña: .constant(.subtitulos), cola: cola, vigilante: Vigilante(),
+                organizador: Organizador(demo: true), sinScroll: true)
     }
 
     @MainActor
     public static func vigilancia(_ vigilante: Vigilante) -> some View {
-        VistaVigilancia(vigilante: vigilante)
+        Ventana(pestaña: .constant(.vigilancia), cola: Cola(), vigilante: vigilante,
+                organizador: Organizador(demo: true), sinScroll: true)
+    }
+
+    /// La pestaña Organizar con descargas de muestra (nombres reales de su biblioteca).
+    @MainActor
+    public static func organizar(vacia: Bool = false, automatico: Bool = false) -> some View {
+        let modelo = Organizador(demo: true)
+        let raiz = URL(fileURLWithPath: "/tmp/subfix-demo-\(UUID().uuidString)")
+        modelo.entrada = vacia ? URL(fileURLWithPath: "/Users/snapsis/Downloads") : raiz.appendingPathComponent("Downloads")
+        modelo.peliculas = vacia ? URL(fileURLWithPath: "/Volumes/DATOS/Peliculas") : raiz.appendingPathComponent("Peliculas")
+        modelo.series = vacia ? URL(fileURLWithPath: "/Volumes/DATOS/Series") : raiz.appendingPathComponent("Series")
+        if !vacia {
+            let nombres = [
+                "Verity.2026.REPACK.2160p.AMZN.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-BYNDR.mkv",
+                "Tulsa King S04E02 Blind Rooster 2160p ATV WEB-DL DDP5 1 Atmos DV HDR H 265-FLUX.mkv",
+                "Send Help (2026) [2160p] [4K] [BluRay] [5.1] [YTS.BZ]",
+                "Ted Lasso (2022) Season 4",
+                "Solo.Mio.1080p.WEB-DL.HEVC.x265.mkv",
+                "THE.INVITE.2026.1080p.AMZN.WEB-DL.DUAL.DDP5.1.H.264-ONIROS.mkv",
+            ]
+            modelo.filas = nombres.map { nombre in
+                let origen = modelo.entrada!.appendingPathComponent(nombre)
+                var lectura = Analizador.leer(nombre)
+                if nombre.hasPrefix("Ted") { lectura = .serie(nombre: "Ted Lasso", temporada: 4, episodio: nil) }
+                return Descarga(examen: Examen(origen: origen, forma: .archivo(video: origen, acompañantes: []),
+                                               lectura: lectura))
+            }
+            modelo.filas[5].resultado = .hecho
+        }
+        modelo.automatico = automatico
+        return Ventana(pestaña: .constant(.organizar), cola: Cola(), vigilante: Vigilante(),
+                       organizador: modelo, sinScroll: true)
+    }
+
+    @MainActor
+    public static func editorDeNombre() -> some View {
+        EditorDeNombre(lectura: .pelicula(titulo: "Solo Mio", año: nil), guardar: { _ in }, cancelar: {})
+            .background(Tema.tarjeta)
+    }
+
+    @MainActor
+    public static func opciones(_ cola: Cola) -> some View {
+        PanelDeOpciones(cola: cola)
     }
 
     /// La barra verde en varios puntos de avance, para revisarla sin abrir la app.
@@ -132,13 +178,12 @@ public enum Retratos {
         españa.candidatoEspaña = URL(fileURLWithPath: "/tmp/x.srt")
         var fallada = Fila(url: URL(fileURLWithPath: "/p/Unabomber.2026.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.GG].mkv"))
         fallada.estado = .fallada("ffmpeg: Invalid data found when processing input")
-        return VStack(spacing: 0) {
+        return VStack(spacing: 8) {
             ForEach([hecha, pendiente, conPlan, españa, fallada]) { fila in
                 FilaDePelicula(fila: fila, preferirLatino: true, extraerDelArchivo: false, acciones: .ninguna)
-                    .padding(.horizontal, 14)
-                Divider()
             }
         }
-        .padding(.top, 10)
+        .padding(24)
+        .background(Tema.fondo)
     }
 }

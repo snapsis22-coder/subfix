@@ -57,9 +57,11 @@ Además:
 
 ## Cómo se usa
 
-**Películas** — arrastras archivos o una carpeta entera (también lee sus subcarpetas, por si la temporada ya está organizada por capítulo), o los eliges con **Añadir…** (⌘O). La lista se agrupa por serie y temporada, y antes de tocar nada te muestra qué piensa hacer con cada una. **Procesar** busca el latino en internet; para sacarlo también de la pista del archivo, enciende *Extraer del archivo* en el menú **Opciones**, que recuerda lo que elijas.
+**Películas** — arrastras archivos o una carpeta entera (también lee sus subcarpetas, por si la temporada ya está organizada por capítulo), o los eliges con **Añadir…** (⌘O). Además revisa sola tu carpeta de descargas cada vez que abres la pestaña y trae los videos nuevos, saltándose lo que todavía se está bajando; la carpeta se cambia con el botón de la izquierda de la barra inferior. La lista se agrupa por serie y temporada, y antes de tocar nada te muestra qué piensa hacer con cada una. **Procesar** busca el latino en internet; para sacarlo también de la pista del archivo, enciende *Extraer del archivo* en el menú **Opciones**, que recuerda lo que elijas.
 
 **Organizar en carpetas** mete cada capítulo con su `.srt` en una subcarpeta propia (`Ted Lasso S01E01/`), y lo mismo hace *Carpeta por capítulo* en **Opciones** al terminar de procesar. Dentro del mismo disco es un renombrado instantáneo y nunca se pisa nada.
+
+**Organizar** — ordena las descargas en la estructura que entienden Jellyfin y Plex: cada película a `Películas/Título (Año)/` y cada capítulo a `Series/Serie/Season 01/`, con sus `.srt` y `.nfo` del mismo nombre. Lee el título, el año y el `S01E02` del nombre del archivo o de su carpeta, te muestra a dónde va cada uno antes de mover nada, y si lee mal un nombre lo corriges con el lápiz. Si el destino ya existe, no lo toca. **Deshacer** devuelve el último lote a su sitio, y con **Automático** repasa la carpeta cada 30 segundos y avisa con una notificación.
 
 **Vigilar carpeta** — le señalas tu carpeta de descargas y se encarga sola. Repasa cada 30 segundos, espera a que el archivo deje de crecer para no procesar una descarga a medias, y avisa con una notificación.
 
@@ -70,7 +72,7 @@ Necesitas macOS 14 o posterior y las herramientas de línea de comandos de Xcode
 ```sh
 ./herramientas/compilar_ffmpeg.sh   # una vez: ffmpeg y ffprobe propios
 ./build_app.sh                      # compila, firma e instala en /Applications
-swift run subfixtests               # 24 pruebas
+swift run subfixtests               # 139 pruebas
 ```
 
 `build_app.sh` firma con una identidad local llamada `snapsis-dev`. Si no la tienes, cae a firma ad-hoc y funciona igual; cambia la variable `IDENTIDAD` por la tuya si quieres firma estable.
@@ -94,6 +96,7 @@ Como no entra x264 ni x265, lo que se empaqueta es **LGPL 2.1** y no GPL. La lic
 
 ```
 Sources/SubFixKit   motor: sondeo, extracción, formato para el TV, OpenSubtitles, Addic7ed, subtítulos bajados a mano
+Sources/OrganizarKit lectura de nombres y plan para ordenar películas y series
 Sources/SubFixUI    las vistas
 Sources/SubFix      el ejecutable, que solo abre la ventana
 Sources/subfixtests pruebas, con arnés propio

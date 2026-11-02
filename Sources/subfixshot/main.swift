@@ -14,9 +14,13 @@ import SwiftUI
 /// app de verdad.
 
 @MainActor
-func retratar<V: View>(_ vista: V, _ nombre: String, en carpeta: URL, alto: CGFloat = 470) {
+func retratar<V: View>(_ vista: V, _ nombre: String, en carpeta: URL,
+                       ancho: CGFloat = 1040, alto: CGFloat = 720, oscuro: Bool = false) {
+    NSApp.appearance = NSAppearance(named: oscuro ? .darkAqua : .aqua)
     let renderizador = ImageRenderer(content:
-        vista.frame(width: 640, height: alto).background(Color(nsColor: .windowBackgroundColor))
+        vista.frame(width: ancho, height: alto)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .environment(\.colorScheme, oscuro ? .dark : .light)
     )
     renderizador.scale = 2
     guard let imagen = renderizador.nsImage,
@@ -54,8 +58,14 @@ MainActor.assumeIsolated {
     }
 
     retratar(Retratos.vigilancia(Vigilante()), "3-vigilancia", en: salida)
-    retratar(Retratos.barras(), "4-barras", en: salida, alto: 300)
-    retratar(Retratos.ejemplosDeCheck(), "5-checks", en: salida, alto: 520)
-    retratar(Retratos.tiraDelSello(), "6-sello", en: salida, alto: 150)
-    retratar(Retratos.filasDeEjemplo(), "7-filas", en: salida, alto: 420)
+    retratar(Retratos.barras(), "4-barras", en: salida, ancho: 640, alto: 300)
+    retratar(Retratos.tiraDelSello(), "6-sello", en: salida, ancho: 640, alto: 150)
+    retratar(Retratos.filasDeEjemplo(), "7-filas", en: salida, ancho: 1000, alto: 440)
+    retratar(Retratos.filasDeEjemplo(), "7-filas-oscuro", en: salida, ancho: 1000, alto: 440, oscuro: true)
+    retratar(Retratos.organizar(vacia: true), "8-organizar-vacia", en: salida)
+    retratar(Retratos.organizar(), "9-organizar", en: salida)
+    retratar(Retratos.organizar(automatico: true), "10-organizar-oscuro", en: salida, oscuro: true)
+    retratar(Retratos.editorDeNombre(), "11-editor", en: salida, ancho: 320, alto: 330)
+    retratar(Retratos.opciones(cola), "12-opciones", en: salida, ancho: 400, alto: 300)
+    retratar(Retratos.peliculas(Cola()), "13-vacia-oscuro", en: salida, oscuro: true)
 }

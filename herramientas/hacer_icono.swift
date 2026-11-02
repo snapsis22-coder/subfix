@@ -29,14 +29,23 @@ let paletas: [Paleta] = [
     Paleta(nombre: "Vino de telón", arriba: (0.72, 0.24, 0.26), abajo: (0.36, 0.07, 0.12)),
     Paleta(nombre: "Noche con TV plateado", arriba: (0.20, 0.22, 0.28), abajo: (0.05, 0.05, 0.08),
            marco: (0.78, 0.81, 0.87), pie: (0.70, 0.73, 0.79)),
+    // 2-nov-2026: SubFix absorbió a Cartelera y tomó su morado; el icono va a juego.
+    Paleta(nombre: "Morado de la app", arriba: (0.68, 0.36, 0.98), abajo: (0.31, 0.19, 0.82)),
+    // 2-nov-2026: la app pasó a los colores de una llama (naranja → magenta → morado).
+    Paleta(nombre: "Llama", arriba: (1.0, 0.56, 0.05), abajo: (0.62, 0.15, 0.78)),
 ]
 
 /// Un televisor con dos líneas de subtítulo dentro, como se ven de verdad:
 /// blancas, centradas y pegadas al borde inferior de la pantalla.
 func dibujar(_ ctx: CGContext, _ paleta: Paleta = paletas[0]) {
     let espacio = CGColorSpaceCreateDeviceRGB()
+    // Misma regla que la interfaz (`intensidadDeLaPaleta` en Tema.swift): 20 % menos saturación.
     func color(_ r: Double, _ v: Double, _ a: Double, _ alfa: Double = 1) -> CGColor {
-        CGColor(red: r, green: v, blue: a, alpha: alfa)
+        let origen = NSColor(red: r, green: v, blue: a, alpha: 1).usingColorSpace(.deviceRGB)!
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0
+        origen.getHue(&h, saturation: &s, brightness: &b, alpha: nil)
+        let suave = NSColor(hue: h, saturation: s * 0.64, brightness: b, alpha: alfa).usingColorSpace(.deviceRGB)!
+        return CGColor(red: suave.redComponent, green: suave.greenComponent, blue: suave.blueComponent, alpha: alfa)
     }
     func redondeado(_ r: CGRect, _ radio: Double) -> CGPath {
         CGPath(roundedRect: r, cornerWidth: radio, cornerHeight: radio, transform: nil)
@@ -165,7 +174,7 @@ if CommandLine.arguments.contains("--variantes") {
 // `--paleta N` elige el fondo (1 = el primero de la lista). El elegido para la
 // app es el grafito con televisor plateado: es el que se lee a 32 px, y no
 // compite con el azul de Calculadora+ ni de Peek a Boo en el Dock.
-var paletaElegida = paletas[2]
+var paletaElegida = paletas[7]
 if let posicion = CommandLine.arguments.firstIndex(of: "--paleta"),
    posicion + 1 < CommandLine.arguments.count,
    let numero = Int(CommandLine.arguments[posicion + 1]),

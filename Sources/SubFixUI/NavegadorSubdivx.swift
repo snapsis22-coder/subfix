@@ -70,20 +70,26 @@ struct HojaDeSubdivx: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(lote.trabajos.count == 1 ? "Subdivx · \(lote.trabajos[0].busqueda)"
                                                   : "Subdivx · \(lote.trabajos.count) por buscar")
-                        .font(.headline).lineLimit(1)
-                    Text(navegador.estado).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(Tema.tinta)
+                        .lineLimit(1)
+                    Text(navegador.estado).font(.caption).foregroundStyle(Tema.tintaSuave).lineLimit(2)
                 }
 
                 Spacer()
 
                 if navegador.recorriendo {
                     Button("Detener") { navegador.detener() }
+                        .buttonStyle(BotonSecundario(compacto: true))
                         .help("Termina el que está bajando y para. Después puedes buscar y bajar a mano")
                 }
                 Button(navegador.terminado ? "Listo" : "Cerrar") { cerrar() }
+                    .buttonStyle(BotonPrincipal(compacto: true))
                     .keyboardShortcut(.cancelAction)
             }
-            .padding(10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Tema.tarjeta)
 
             Divider()
 
