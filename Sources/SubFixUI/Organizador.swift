@@ -1,6 +1,7 @@
 import AppKit
 import OrganizarKit
 import Foundation
+import SubFixKit
 import UserNotifications
 
 /// Una descarga en la lista. Es un struct dentro del modelo, no un objeto observable
@@ -123,13 +124,25 @@ public final class Organizador: ObservableObject {
         }
     }
 
-    /// «Películas › Verity (2026)», para enseñar el destino sin la ruta completa.
+    /// «Películas › Verity (2026) › Verity (2026).mkv», para enseñar el destino sin la ruta completa.
     public func rutaCorta(de fila: Descarga) -> [String] {
         guard let lectura = fila.lectura else { return [] }
+        var ruta: [String]
         switch lectura {
-        case .pelicula: return [peliculas?.lastPathComponent ?? "Películas", lectura.carpeta]
-        case .serie: return [series?.lastPathComponent ?? "Series", lectura.carpeta, lectura.carpetaDeTemporada!]
+        case .pelicula: ruta = [peliculas?.lastPathComponent ?? "Películas", lectura.carpeta]
+        case .serie: ruta = [series?.lastPathComponent ?? "Series", lectura.carpeta, lectura.carpetaDeTemporada!]
         }
+        // Con un solo video se enseña también cómo va a quedar llamándose.
+        let videos: [URL]
+        switch fila.examen.forma {
+        case .archivo(let video, _): videos = [video]
+        case .carpeta(let lista): videos = lista
+        }
+        if videos.count == 1, Analizador.esVideo(videos[0]),
+           let nombre = Planificador.nombreLimpio(de: videos[0], lectura: lectura) {
+            ruta.append(nombre + "." + videos[0].pathExtension)
+        }
+        return ruta
     }
 
     // MARK: - Acciones
@@ -181,12 +194,22 @@ public final class Organizador: ObservableObject {
         mensaje = nil
         var hechos: [Movimiento] = []
         var bien = 0
+        var sinEtiqueta: [String] = []
 
         for fila in lote {
             guard let lectura = fila.lectura else { continue }
             moviendo.insert(fila.id)
             let movimientos = Planificador.movimientos(fila.examen, como: lectura, en: bibliotecas)
             let resultado = await Task.detached { Planificador.ejecutar(movimientos) }.value
+            // El nombre con que se bajó queda en el archivo (macOS y, si es MKV, dentro).
+            let renombrados = Planificador.videosRenombrados(resultado.hechos)
+            let problemas = await Task.detached {
+                renombrados.compactMap { video, original -> String? in
+                    let r = NombreOriginal.guardar(original, en: video)
+                    return r.problemaEnMKV == nil || r.problemaEnMKV == "no es MKV" ? nil : video.lastPathComponent
+                }
+            }.value
+            sinEtiqueta += problemas
             moviendo.remove(fila.id)
             hechos += resultado.hechos
             if let i = filas.firstIndex(where: { $0.id == fila.id }) {
@@ -203,6 +226,10 @@ public final class Organizador: ObservableObject {
         trabajando = false
         if bien > 0 {
             mensaje = bien == 1 ? "Listo: 1 descarga organizada" : "Listo: \(bien) descargas organizadas"
+            if !sinEtiqueta.isEmpty {
+                mensaje! += ". El nombre de descarga quedó sólo en «Obtener información» de "
+                    + sinEtiqueta.joined(separator: ", ") + " (el MKV no tenía espacio para guardarlo dentro)"
+            }
             if automatico { avisar("SubFix organizó \(bien == 1 ? "1 descarga" : "\(bien) descargas")",
                                    lote.compactMap { $0.lectura?.carpeta }.joined(separator: ", ")) }
         }

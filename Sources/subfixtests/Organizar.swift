@@ -106,18 +106,31 @@ func pruebasDeOrganizar() {
         if let falla = resultado.falla { print("       \(falla.localizedDescription)") }
     }
     probar("película suelta → Peliculas/Verity (2026)/ con sus .srt") {
-        existe(bibliotecas.peliculas, "Verity (2026)/Verity.2026.2160p.WEB-DL.mkv")
-            && existe(bibliotecas.peliculas, "Verity (2026)/Verity.2026.2160p.WEB-DL.es.srt")
+        existe(bibliotecas.peliculas, "Verity (2026)/Verity (2026).mkv")
+            && existe(bibliotecas.peliculas, "Verity (2026)/Verity (2026).es.srt")
+            && existe(bibliotecas.peliculas, "Verity (2026)/Verity (2026).srt")
     }
     probar("carpeta de película → renombrada a «Send Help (2026)» con todo dentro") {
-        existe(bibliotecas.peliculas, "Send Help (2026)/Send.Help.2026.2160p.srt")
+        existe(bibliotecas.peliculas, "Send Help (2026)/Send Help (2026).mkv")
+            && existe(bibliotecas.peliculas, "Send Help (2026)/Send Help (2026).srt")
             && existe(bibliotecas.peliculas, "Send Help (2026)/sample/sample.mkv")
     }
     probar("episodio → Series/Tulsa King/Season 04/") {
-        existe(bibliotecas.series, "Tulsa King/Season 04/Tulsa King S04E02 Blind Rooster 2160p/Tulsa King S04E02 Blind Rooster 2160p.mkv")
+        existe(bibliotecas.series, "Tulsa King/Season 04/Tulsa King S04E02 Blind Rooster 2160p/Tulsa King S04E02.mkv")
     }
     probar("temporada entera → Series/Ted Lasso/Season 04/") {
-        existe(bibliotecas.series, "Ted Lasso/Season 04/Ted.Lasso.S04E02.mkv")
+        existe(bibliotecas.series, "Ted Lasso/Season 04/Ted Lasso S04E01.mkv")
+            && existe(bibliotecas.series, "Ted Lasso/Season 04/Ted Lasso S04E02.mkv")
+    }
+    probar("los videos renombrados se saben con su nombre de descarga y su sitio final") {
+        let r = Planificador.videosRenombrados(todos)
+        let send = r.first { $0.nombreOriginal == "Send.Help.2026.2160p.mkv" }
+        return r.count == 5
+            && send?.video.path == bibliotecas.peliculas.appendingPathComponent("Send Help (2026)/Send Help (2026).mkv").path
+    }
+    probar("un episodio doble (S01E01E02) conserva su nombre") {
+        Planificador.nombreLimpio(de: URL(fileURLWithPath: "/x/Show.S01E01E02.mkv"),
+                                  lectura: .serie(nombre: "Show", temporada: 1, episodio: nil)) == nil
     }
     probar("el .txt suelto no se tocó") { existe(entrada, "leeme.txt") }
 
@@ -131,12 +144,13 @@ func pruebasDeOrganizar() {
         crear("Verity.2026.1080p.mkv")
         let otro = Planificador.examinar(entrada.appendingPathComponent("Verity.2026.1080p.mkv"))!
         let m = Planificador.movimientos(otro, como: otro.lectura!, en: bibliotecas)
-        // La carpeta existe pero el archivo no: puede entrar. Ahora uno con el mismo nombre exacto:
+        // Ahora uno que ya está, con el mismo nombre exacto, en otra carpeta:
         crear("Otra/Verity.2026.2160p.WEB-DL.mkv")
         let gemelo = Planificador.examinar(entrada.appendingPathComponent("Otra/Verity.2026.2160p.WEB-DL.mkv"))!
         let mg = Planificador.movimientos(gemelo, como: gemelo.lectura!, en: bibliotecas)
         let resultado = Planificador.ejecutar(mg)
-        return Planificador.diagnosticar(m, lectura: otro.lectura!) == .listo
+        // Con el nombre limpio, dos versiones de la misma película chocan: no se pisa ninguna.
+        return Planificador.diagnosticar(m, lectura: otro.lectura!) == .choque("Verity (2026).mkv")
             && resultado.hechos.isEmpty && resultado.falla != nil
             && existe(entrada, "Otra/Verity.2026.2160p.WEB-DL.mkv")
     }

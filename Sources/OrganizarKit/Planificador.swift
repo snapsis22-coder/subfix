@@ -137,32 +137,104 @@ public enum Planificador {
 
         switch (examen.forma, lectura) {
         case (.archivo(let video, let acompañantes), _):
-            // Suelto: se le arma su carpeta (película) o va a la de la temporada (serie).
-            return ([video] + acompañantes).map {
-                Movimiento(desde: $0, hacia: destino.appendingPathComponent($0.lastPathComponent))
-            }
+            // Suelto: se le arma su carpeta (película) o va a la de la temporada (serie),
+            // ya con el nombre limpio, y sus .srt/.nfo lo siguen con el mismo nombre.
+            return piezas(video, acompañantes, nombre: nombreLimpio(de: video, lectura: lectura), hacia: destino)
 
-        case (.carpeta, .pelicula):
+        case (.carpeta(let videos), _):
+            // Primero se le cambia el nombre al video DENTRO de la descarga y después se
+            // mueve; así «Deshacer», que va al revés, deja todo como vino.
+            let previos = renombresDentro(videos, lectura: lectura)
+            let mapa = Dictionary(previos.map { ($0.desde, $0.hacia) }, uniquingKeysWith: { a, _ in a })
+            return previos + mover(examen.origen, lectura: lectura, a: destino, renombrados: mapa)
+        }
+    }
+
+    private static func mover(_ origen: URL, lectura: Lectura, a destino: URL,
+                              renombrados: [URL: URL]) -> [Movimiento] {
+        switch lectura {
+        case .pelicula:
             // La carpeta entera pasa a llamarse «Título (Año)», con todo lo de dentro.
-            return [Movimiento(desde: examen.origen, hacia: destino)]
+            return [Movimiento(desde: origen, hacia: destino)]
 
-        case (.carpeta, .serie(_, _, let episodio?)):
+        case .serie(_, _, _?):
             // Un episodio en su propia carpeta: la carpeta entra en la de la temporada.
-            let nombre = Analizador.colapsar(examen.origen.lastPathComponent)
-            _ = episodio
-            return [Movimiento(desde: examen.origen, hacia: destino.appendingPathComponent(nombre))]
+            let nombre = Analizador.colapsar(origen.lastPathComponent)
+            return [Movimiento(desde: origen, hacia: destino.appendingPathComponent(nombre))]
 
-        case (.carpeta, .serie(_, _, nil)):
+        case .serie(_, _, nil):
             // Temporada entera: si la carpeta de la temporada aún no existe, la descarga
             // pasa a ser esa carpeta; si ya existe, se vacía dentro de ella.
             if !FileManager.default.fileExists(atPath: destino.path) {
-                return [Movimiento(desde: examen.origen, hacia: destino)]
+                return [Movimiento(desde: origen, hacia: destino)]
             }
             let hijos = (try? FileManager.default.contentsOfDirectory(
-                at: examen.origen, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
-            return hijos.sorted { $0.lastPathComponent < $1.lastPathComponent }.map {
-                Movimiento(desde: $0, hacia: destino.appendingPathComponent($0.lastPathComponent))
+                at: origen, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+            return hijos.map { renombrados[$0] ?? $0 }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }.map {
+                    Movimiento(desde: $0, hacia: destino.appendingPathComponent($0.lastPathComponent))
+                }
+        }
+    }
+
+    // MARK: - Nombre limpio
+
+    /// Cómo se llama el video al quedar organizado: «Tony (2026)» o «Ted Lasso S03E11».
+    /// nil = se queda como vino: un episodio doble (`S01E01E02`, se perdería el segundo)
+    /// o un nombre del que no se saca el episodio.
+    public static func nombreLimpio(de video: URL, lectura: Lectura) -> String? {
+        switch lectura {
+        case .pelicula:
+            return lectura.carpeta
+        case .serie(let nombre, _, _):
+            let original = video.deletingPathExtension().lastPathComponent
+            let doble = #"[Ss]\d{1,2}[Ee]\d{1,3}[-_. ]?[Ee]\d{1,3}"#
+            if original.range(of: doble, options: .regularExpression) != nil { return nil }
+            guard case .serie(_, let temporada, let episodio?)? = Analizador.leer(video.lastPathComponent) else {
+                return nil
             }
+            return "\(nombre) " + String(format: "S%02dE%02d", temporada, episodio)
+        }
+    }
+
+    /// El video y lo que lleva su nombre (`peli.srt`, `peli.es.srt`, `peli.nfo`) hacia
+    /// `carpeta`, con `nombre` en vez del de la descarga (`.es.srt` se conserva).
+    static func piezas(_ video: URL, _ acompañantes: [URL], nombre: String?, hacia carpeta: URL) -> [Movimiento] {
+        let viejo = video.deletingPathExtension().lastPathComponent
+        return ([video] + acompañantes).map { pieza in
+            var final = pieza.lastPathComponent
+            if let nombre, final.hasPrefix(viejo) { final = nombre + final.dropFirst(viejo.count) }
+            return Movimiento(desde: pieza, hacia: carpeta.appendingPathComponent(final))
+        }
+    }
+
+    /// Los cambios de nombre dentro de una carpeta descargada, antes de moverla.
+    /// En una película sólo si trae un único video (si trae extras, no se adivina cuál
+    /// es). Dos capítulos que darían el mismo nombre (dos calidades) se quedan como vinieron.
+    static func renombresDentro(_ videos: [URL], lectura: Lectura) -> [Movimiento] {
+        if case .pelicula = lectura, videos.count != 1 { return [] }
+        let nombres = videos.map { nombreLimpio(de: $0, lectura: lectura) }
+        let repetidos = Set(Dictionary(grouping: nombres.compactMap { $0 }, by: { $0 }).filter { $0.value.count > 1 }.keys)
+        return zip(videos, nombres).flatMap { video, nombre -> [Movimiento] in
+            guard let nombre, !repetidos.contains(nombre),
+                  nombre != video.deletingPathExtension().lastPathComponent else { return [] }
+            return piezas(video, acompañantes(de: video), nombre: nombre, hacia: video.deletingLastPathComponent())
+        }
+    }
+
+    /// Los videos que cambiaron de nombre en un lote ya hecho: dónde quedaron al final
+    /// y cómo se llamaban al bajarlos (para guardarlo en el archivo).
+    public static func videosRenombrados(_ hechos: [Movimiento]) -> [(video: URL, nombreOriginal: String)] {
+        hechos.enumerated().compactMap { i, m in
+            guard Analizador.esVideo(m.desde), m.desde.lastPathComponent != m.hacia.lastPathComponent else { return nil }
+            var ruta = m.hacia.standardizedFileURL.path
+            for despues in hechos[(i + 1)...] {
+                let desde = despues.desde.standardizedFileURL.path
+                if ruta.hasPrefix(desde + "/") {
+                    ruta = despues.hacia.standardizedFileURL.path + ruta.dropFirst(desde.count)
+                }
+            }
+            return (URL(fileURLWithPath: ruta), m.desde.lastPathComponent)
         }
     }
 

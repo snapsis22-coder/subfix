@@ -737,7 +737,7 @@ struct ZonaVacia: View {
                 Text("Arrastra películas, capítulos o una carpeta")
                     .font(.system(size: 19, weight: .bold, design: .rounded))
                     .foregroundStyle(Tema.tinta)
-                Text("SubFix busca el subtítulo en español latino y lo deja listo para el Samsung: "
+                Text("SubFix busca el subtítulo en español latino y lo deja listo para el televisor: "
                      + "mismo nombre que el video, UTF-8 con BOM y CRLF.")
                     .font(.system(size: 13))
                     .foregroundStyle(Tema.tintaSuave)

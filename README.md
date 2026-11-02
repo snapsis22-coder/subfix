@@ -61,7 +61,7 @@ Además:
 
 **Organizar en carpetas** mete cada capítulo con su `.srt` en una subcarpeta propia (`Ted Lasso S01E01/`), y lo mismo hace *Carpeta por capítulo* en **Opciones** al terminar de procesar. Dentro del mismo disco es un renombrado instantáneo y nunca se pisa nada.
 
-**Organizar** — ordena las descargas en la estructura que entienden Jellyfin y Plex: cada película a `Películas/Título (Año)/` y cada capítulo a `Series/Serie/Season 01/`, con sus `.srt` y `.nfo` del mismo nombre. Lee el título, el año y el `S01E02` del nombre del archivo o de su carpeta, te muestra a dónde va cada uno antes de mover nada, y si lee mal un nombre lo corriges con el lápiz. Si el destino ya existe, no lo toca. **Deshacer** devuelve el último lote a su sitio, y con **Automático** repasa la carpeta cada 30 segundos y avisa con una notificación.
+**Organizar** — ordena las descargas en la estructura que entienden Jellyfin y Plex: cada película a `Películas/Título (Año)/Título (Año).mkv` y cada capítulo a `Series/Serie/Season 01/Serie S01E02.mkv`, con sus `.srt` y `.nfo`, que cambian de nombre con él. El nombre con el que se bajó no se pierde: queda en «Dónde se obtuvo» (Obtener información) y, en los MKV, dentro del archivo como etiqueta `NOMBRE_ORIGINAL`, escrita en el espacio libre de la cabecera sin reescribir el video. No va en el título, que es lo que muestran el televisor y Jellyfin. Lee el título, el año y el `S01E02` del nombre del archivo o de su carpeta, te muestra a dónde va cada uno antes de mover nada, y si lee mal un nombre lo corriges con el lápiz. Si el destino ya existe, no lo toca. **Deshacer** devuelve el último lote a su sitio, y con **Automático** repasa la carpeta cada 30 segundos y avisa con una notificación.
 
 **Vigilar carpeta** — le señalas tu carpeta de descargas y se encarga sola. Repasa cada 30 segundos, espera a que el archivo deje de crecer para no procesar una descarga a medias, y avisa con una notificación.
 
@@ -72,7 +72,7 @@ Necesitas macOS 14 o posterior y las herramientas de línea de comandos de Xcode
 ```sh
 ./herramientas/compilar_ffmpeg.sh   # una vez: ffmpeg y ffprobe propios
 ./build_app.sh                      # compila, firma e instala en /Applications
-swift run subfixtests               # 139 pruebas
+swift run subfixtests               # 144 pruebas
 ```
 
 `build_app.sh` firma con una identidad local llamada `snapsis-dev`. Si no la tienes, cae a firma ad-hoc y funciona igual; cambia la variable `IDENTIDAD` por la tuya si quieres firma estable.

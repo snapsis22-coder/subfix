@@ -152,7 +152,7 @@ public enum CabeceraMKV {
         return true
     }
 
-    private static func escribir(_ bytes: [UInt8], en video: URL, desde posicion: Int) throws {
+    static func escribir(_ bytes: [UInt8], en video: URL, desde posicion: Int) throws {
         let manejador = try FileHandle(forUpdating: video)
         defer { try? manejador.close() }
         try manejador.seek(toOffset: UInt64(posicion))
@@ -165,7 +165,7 @@ public enum CabeceraMKV {
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("SubFix/Cabeceras")
 
     /// Los bytes que se van a cambiar, para poder volver atrás a mano.
-    private static func guardarCopia(_ bytes: [UInt8], de video: URL, desde posicion: Int) throws -> URL {
+    static func guardarCopia(_ bytes: [UInt8], de video: URL, desde posicion: Int) throws -> URL {
         let carpeta = carpetaDeCopias
         try FileManager.default.createDirectory(at: carpeta, withIntermediateDirectories: true)
         let fecha = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")

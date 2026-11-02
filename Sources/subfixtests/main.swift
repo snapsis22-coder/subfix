@@ -1225,6 +1225,36 @@ if let completo = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(wh
         }
     }
 
+    // Organizar guarda el nombre de descarga (2-nov): dentro del MKV y en «Dónde se obtuvo».
+    let descargada = muestra("Tony.2026.2160p.AMZN.WEB-DL-VAYNE.mkv", audios: [("eng", "English")], subs: [])
+    probar("nombre original: queda DENTRO del MKV sin tocar el video, y en macOS") {
+        let antes = try Data(contentsOf: descargada)
+        let nombre = "Tony.2026.2160p.AMZN.WEB-DL-VAYNE.mkv"
+        let r = NombreOriginal.guardar(nombre, en: descargada)
+        let despues = try Data(contentsOf: descargada)
+        let distintos = bytesDistintos(antes, despues)
+        if r.problemaEnMKV != nil { print("       \(r.problemaEnMKV!)") }
+        let audios = try Sondeo.audios(de: descargada).count
+        return r.enMacOS && r.problemaEnMKV == nil && distintos > 0 && distintos < 200
+            && NombreOriginal.leerDeMKV(descargada) == nombre
+            && NombreOriginal.leerDeMacOS(descargada) == [nombre]
+            && audios == 1
+    }
+    probar("nombre original: la segunda vez no escribe nada ni lo repite") {
+        let antes = try Data(contentsOf: descargada)
+        let otra = try NombreOriginal.guardarEnMKV("Tony.2026.2160p.AMZN.WEB-DL-VAYNE.mkv", en: descargada)
+        try NombreOriginal.guardarEnMacOS("Tony.2026.2160p.AMZN.WEB-DL-VAYNE.mkv", en: descargada)
+        let despues = try Data(contentsOf: descargada)
+        return !otra && despues == antes && NombreOriginal.leerDeMacOS(descargada).count == 1
+    }
+    probar("nombre original: un MP4 sólo lo guarda en macOS y no se toca") {
+        let mp4 = carpeta.appendingPathComponent("peli.mp4")
+        try Data(repeating: 7, count: 64).write(to: mp4)
+        let r = NombreOriginal.guardar("Peli.2026.WEB.mp4", en: mp4)
+        let despues = try Data(contentsOf: mp4)
+        return r.enMacOS && r.problemaEnMKV == "no es MKV" && despues == Data(repeating: 7, count: 64)
+    }
+
     // Botón «Extraer latino» (11-oct): saca el latino del archivo, limpio, como .srt al lado.
     let sucio = carpeta.appendingPathComponent("sucio.srt")
     try! ("1\n00:00:00,100 --> 00:00:00,900\nSubtitulos por www.subsmax.com\n\n"
