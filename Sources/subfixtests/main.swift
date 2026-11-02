@@ -1317,6 +1317,7 @@ if let completo = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(wh
 }
 
 pruebasDeOrganizar()
+await pruebasDeActualizar()
 
 print("\n\(pasadas) pasadas, \(falladas) falladas\n")
 exit(falladas == 0 ? 0 : 1)

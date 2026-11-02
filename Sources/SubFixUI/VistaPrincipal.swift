@@ -42,6 +42,7 @@ public struct VistaPrincipal: View {
             .onAppear {
                 cargarDesdeArgumentos()
                 revisarEntradaSiToca(pestaña)
+                Actualizaciones.compartido.buscarSiToca()
             }
             .onChange(of: pestaña) { _, nueva in revisarEntradaSiToca(nueva) }
             .onChange(of: organizador.entrada) { _, _ in revisarEntradaSiToca(pestaña) }
@@ -85,12 +86,15 @@ struct Ventana: View {
     @ObservedObject var cola: Cola
     @ObservedObject var vigilante: Vigilante
     @ObservedObject var organizador: Organizador
+    @ObservedObject var actualizaciones = Actualizaciones.compartido
     /// ScrollView es AppKit y sale en blanco en los retratos: ahí se pintan las listas sin él.
     var sinScroll = false
 
     var body: some View {
         VStack(spacing: 0) {
             CabeceraSubFix(pestaña: $pestaña) { accesorio }
+            AvisoDeActualizacion(modelo: actualizaciones,
+                                 ocupada: cola.trabajando || organizador.trabajando || vigilante.revisando)
             Group {
                 switch pestaña {
                 case .subtitulos: VistaPeliculas(cola: cola, entradaDeOrganizar: organizador.entrada, sinScroll: sinScroll)

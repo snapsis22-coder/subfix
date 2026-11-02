@@ -13,6 +13,7 @@ struct SubFixApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}   // no hay documentos que crear
+            CommandGroup(after: .appInfo) { ComandosDeActualizacion() }
         }
     }
 }

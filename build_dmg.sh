@@ -44,6 +44,10 @@ PRIMERA VEZ QUE LA ABRAS
   3. Pulsa "Abrir de todos modos" y confirma.
   A partir de ahí abre con doble clic como cualquier app.
 
+  Las versiones siguientes se instalan desde la propia app (aviso
+  «Actualizar» o menú SubFix > Buscar actualizaciones…) y ya no piden
+  este permiso.
+
   (El truco viejo de clic derecho > Abrir YA NO funciona: Apple lo quitó
    en macOS 15.)
 

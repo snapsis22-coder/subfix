@@ -65,6 +65,10 @@ Además:
 
 **Vigilar carpeta** — le señalas tu carpeta de descargas y se encarga sola. Repasa cada 30 segundos, espera a que el archivo deje de crecer para no procesar una descarga a medias, y avisa con una notificación.
 
+## Actualizaciones
+
+SubFix se actualiza desde sus Releases de GitHub. Al abrir, como mucho una vez al día, mira si hay una versión nueva y lo avisa con una franja; solo instala cuando pulsas **Actualizar**, y no mientras está procesando u organizando. Antes de cambiar nada comprueba que el DMG coincida con el hash que publica GitHub y que la app nueva esté firmada con el mismo certificado que la instalada. La versión vieja va a la Papelera. Como la descarga la hace la app y no el navegador, macOS no vuelve a pedir «Abrir de todos modos». También está en el menú **SubFix › Buscar actualizaciones…**.
+
 ## Compilar
 
 Necesitas macOS 14 o posterior y las herramientas de línea de comandos de Xcode.
@@ -72,7 +76,7 @@ Necesitas macOS 14 o posterior y las herramientas de línea de comandos de Xcode
 ```sh
 ./herramientas/compilar_ffmpeg.sh   # una vez: ffmpeg y ffprobe propios
 ./build_app.sh                      # compila, firma e instala en /Applications
-swift run subfixtests               # 144 pruebas
+swift run subfixtests               # 150 pruebas (SUBFIX_PROBAR_RED=1 incluye la descarga real)
 ```
 
 `build_app.sh` firma con una identidad local llamada `snapsis-dev`. Si no la tienes, cae a firma ad-hoc y funciona igual; cambia la variable `IDENTIDAD` por la tuya si quieres firma estable.

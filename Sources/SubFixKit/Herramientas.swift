@@ -147,6 +147,7 @@ public enum ErrorDeSubFix: LocalizedError {
     case fallóLaExtracción(String)
     case yaExiste(String)
     case fallóElRemux(String)
+    case fallóLaActualización(String)
 
     public var errorDescription: String? {
         switch self {
@@ -156,6 +157,8 @@ public enum ErrorDeSubFix: LocalizedError {
             return "No se pudo leer el archivo: \(detalle)"
         case .fallóLaExtracción(let detalle):
             return "La extracción falló: \(detalle)"
+        case .fallóLaActualización(let detalle):
+            return "No se pudo actualizar: \(detalle)"
         case .fallóElRemux(let detalle):
             return "No se pudo crear el MKV: \(detalle)"
         case .yaExiste(let nombre):
