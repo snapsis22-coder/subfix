@@ -19,7 +19,7 @@ public enum OpenSubtitles {
         public var explicacion: String {
             porHash
                 ? "OpenSubtitles, por hash exacto del archivo"
-                : "OpenSubtitles, por título — conviene revisar la sincronía"
+                : "OpenSubtitles, por título"
         }
     }
 
@@ -90,6 +90,20 @@ public enum OpenSubtitles {
     /// Con `preferirLatino`, si el mejor resulta de España se prueban unos cuantos
     /// más buscando uno latino; si no aparece, se devuelve el de España.
     public static func buscar(para video: URL, preferirLatino: Bool = false) async -> Hallazgo? {
+        var deEspaña: Hallazgo?, elegido: Hallazgo?
+        await candidatos(para: video, preferirLatino: preferirLatino, limite: preferirLatino ? 8 : 2) { hallazgo in
+            guard preferirLatino, TextoSRT.pareceDeEspaña(hallazgo.texto) else { elegido = hallazgo; return true }
+            if deEspaña == nil { deEspaña = hallazgo }
+            return false
+        }
+        return elegido ?? deEspaña
+    }
+
+    /// Los subtítulos en español de este video, del más probable al menos (primero los
+    /// del mismo archivo por hash, luego por título), bajados uno a uno hasta que
+    /// `alEncontrar` diga basta (`true`) o se hayan bajado `limite`.
+    public static func candidatos(para video: URL, preferirLatino: Bool = false, limite: Int = 6,
+                                  _ alEncontrar: (Hallazgo) -> Bool) async {
         let atributos = try? FileManager.default.attributesOfItem(atPath: video.path)
         let tamaño = (atributos?[.size] as? Int) ?? 0
         let (titulo, temporada, episodio) = tituloLimpio(video)
@@ -113,7 +127,8 @@ public enum OpenSubtitles {
         let fichas = Set(video.lastPathComponent.lowercased()
             .components(separatedBy: CharacterSet(charactersIn: ". _-")))
 
-        var deEspaña: Hallazgo?
+        var bajados = 0
+        var vistos: Set<String> = []
         for intento in intentos {
             guard let resultados = try? await pedir(intento.ruta), !resultados.isEmpty else { continue }
             let validos = resultados.filter { ["srt", "ass", "ssa"].contains(($0.SubFormat ?? "srt").lowercased()) }
@@ -126,17 +141,19 @@ public enum OpenSubtitles {
                 let nombreSub = (r.SubFileName ?? "").lowercased()
                 return palabrasDelTitulo.contains(where: { nombreSub.contains($0) })
             }
-            for candidato in aceptables.prefix(preferirLatino ? 4 : 1) {
-                guard let enlace = candidato.SubDownloadLink, let texto = try? await descargar(enlace),
+            for candidato in aceptables {
+                guard bajados < limite else { return }
+                // El mismo subtítulo sale por hash y por título: se baja una vez.
+                guard let enlace = candidato.SubDownloadLink, vistos.insert(enlace).inserted else { continue }
+                bajados += 1
+                guard let texto = try? await descargar(enlace),
                       TextoSRT.esSRT(texto), TextoSRT.pareceEspañol(texto) else { continue }
                 let hallazgo = Hallazgo(texto: texto,
                                         nombreDelArchivo: candidato.SubFileName ?? "subtítulo",
                                         porHash: intento.porHash)
-                guard preferirLatino, TextoSRT.pareceDeEspaña(texto) else { return hallazgo }
-                if deEspaña == nil { deEspaña = hallazgo }
+                if alEncontrar(hallazgo) { return }
             }
         }
-        return deEspaña
     }
 
     private static func puntaje(_ r: Resultado, _ fichas: Set<String>) -> Double {

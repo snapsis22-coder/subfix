@@ -61,7 +61,9 @@ QUÉ HACE
   • Lo saca de la pista incrustada, de un .srt suelto de la carpeta o de
     OpenSubtitles, en ese orden.
   • Repara los .srt que vienen mal codificados (los de las tildes rotas).
-  • Puede vigilar tu carpeta de descargas y hacerlo solo.
+  • Comprueba que lo bajado vaya sincronizado con tu video (contra el
+    subtítulo que trae dentro o contra el audio) y, si está corrido, lo corrige.
+  • En la pestaña Pistas ves y cambias los audios y subtítulos de cada película.
 
 QUÉ NO HACE
   • Subtítulos de imagen (PGS de Blu-ray, VobSub de DVD): eso necesita OCR.

@@ -105,6 +105,8 @@ public enum Motor {
         /// Sólo apareció el de España y se pidió latino: queda apartado en `candidato`
         /// (un temporal) y NO se pone junto a la película hasta que el usuario lo acepte.
         case soloEspaña(origen: String, candidato: URL)
+        /// Se encontró subtítulo, pero ninguno va con este video (otra versión, otro montaje).
+        case desfasado(String)
         case falló(String)
 
         public var fueBien: Bool {
@@ -127,9 +129,16 @@ public enum Motor {
         public var extraerDelArchivo: Bool
         /// Si lo único que hay es de España, no instalarlo: devolver `.soloEspaña`.
         public var retenerEspaña: Bool
+        /// Comparar lo bajado con el video (`Sincronia`) y quedarse con el que va sincronizado.
+        public var comprobarSincronia: Bool
+        /// Huellas (`Sincronia.huella`) de subtítulos que el usuario ya rechazó con «Reprocesar».
+        public var descartados: Set<String>
 
         public init(usarRed: Bool = true, forzar: Bool = false, pistaPreferida: Int? = nil,
-                    preferirLatino: Bool = false, extraerDelArchivo: Bool = true, retenerEspaña: Bool = false) {
+                    preferirLatino: Bool = false, extraerDelArchivo: Bool = true, retenerEspaña: Bool = false,
+                    comprobarSincronia: Bool = true, descartados: Set<String> = []) {
+            self.comprobarSincronia = comprobarSincronia
+            self.descartados = descartados
             self.extraerDelArchivo = extraerDelArchivo
             self.retenerEspaña = retenerEspaña
             self.usarRed = usarRed
@@ -181,54 +190,134 @@ public enum Motor {
             diagnostico.pistas.first { $0.indice == indice }
         } ?? diagnostico.elegida) : nil
 
-        // Si el usuario eligió la pista a mano, manda él.
+        // Si el usuario eligió la pista a mano, manda él: ni se compara ni se busca otra.
+        if let elegida = opciones.pistaPreferida.flatMap({ indice in diagnostico.pistas.first { $0.indice == indice } }) {
+            let temporal = FileManager.default.temporaryDirectory
+                .appendingPathComponent("subfix-\(UUID().uuidString).srt")
+            defer { try? FileManager.default.removeItem(at: temporal) }
+            do {
+                try Sondeo.extraer(pista: elegida, de: video, a: temporal)
+                let texto = try TextoSRT.leer(temporal).texto
+                return instalar(texto, origen: "pista \(elegida.resumen)", en: destino, retenerEspaña: opciones.retenerEspaña)
+            } catch {
+                return .falló(error.localizedDescription)
+            }
+        }
+
+        var eleccion = Eleccion(opciones: opciones,
+                                comprobador: opciones.comprobarSincronia ? Sincronia.Comprobador(video: video) : nil)
+
         let latino = opciones.usarRed && (opciones.preferirLatino || !delArchivo) && diagnostico.esEpisodio
-            && opciones.pistaPreferida == nil && pista?.esLatino != true
-            ? await Addic7ed.buscarLatino(para: video) : nil
+            && pista?.esLatino != true
+        if latino {
+            await Addic7ed.candidatosLatinos(para: video) { hallazgo in
+                eleccion.considerar(hallazgo.texto, origen: hallazgo.explicacion)
+            }
+        }
 
-        var hallado: (texto: String, origen: String)?
-        if let latino { hallado = (latino.texto, latino.explicacion) }
-
-        if hallado == nil, let pista {
+        // Lo que trae el archivo va sincronizado por definición: no se compara.
+        if !eleccion.terminada, let pista {
             let temporal = FileManager.default.temporaryDirectory
                 .appendingPathComponent("subfix-\(UUID().uuidString).srt")
             defer { try? FileManager.default.removeItem(at: temporal) }
             do {
                 try Sondeo.extraer(pista: pista, de: video, a: temporal)
                 let texto = try TextoSRT.leer(temporal).texto
-                // Una pista elegida a mano manda; una elegida sola tiene que ser español
-                // de verdad (una pista sin idioma marcado puede ser inglés).
-                if opciones.pistaPreferida != nil || TextoSRT.pareceEspañol(texto) {
-                    hallado = (texto, "pista \(pista.resumen)")
+                // Una pista elegida sola tiene que ser español de verdad (sin idioma marcado puede ser inglés).
+                if TextoSRT.pareceEspañol(texto) {
+                    _ = eleccion.considerar(texto, origen: "pista \(pista.resumen)", comprobar: false)
                 }
             } catch {
-                return .falló(error.localizedDescription)
+                if eleccion.vacia { return .falló(error.localizedDescription) }
             }
         }
 
-        if hallado == nil, delArchivo, let suelto = diagnostico.suelto ?? sueltoPara(video) {
+        // Un .srt suelto del torrent: suele ir con el video, pero se comprueba.
+        if !eleccion.terminada, delArchivo, let suelto = diagnostico.suelto ?? sueltoPara(video) {
             do {
                 let leido = try TextoSRT.leer(suelto)
                 if TextoSRT.pareceEspañol(leido.texto) {
-                    hallado = (leido.texto, "\(suelto.lastPathComponent) (\(leido.codificacion))")
+                    _ = eleccion.considerar(leido.texto, origen: "\(suelto.lastPathComponent) (\(leido.codificacion))")
                 }
             } catch {
-                return .falló(error.localizedDescription)
+                if eleccion.vacia { return .falló(error.localizedDescription) }
             }
         }
 
-        if hallado == nil, opciones.usarRed,
-           let encontrado = await OpenSubtitles.buscar(para: video, preferirLatino: opciones.preferirLatino) {
-            hallado = (encontrado.texto, encontrado.explicacion)
+        if !eleccion.terminada, opciones.usarRed {
+            await OpenSubtitles.candidatos(para: video, preferirLatino: opciones.preferirLatino) { hallazgo in
+                eleccion.considerar(hallazgo.texto, origen: hallazgo.explicacion)
+            }
         }
 
-        guard let hallado else { return .sinSubtitulos(soloImagen: !diagnostico.pistasDeImagen.isEmpty) }
-        return instalar(hallado.texto, origen: hallado.origen, en: destino, retenerEspaña: opciones.retenerEspaña)
+        return eleccion.resultado(en: destino, retenerEspaña: opciones.retenerEspaña,
+                                  soloImagen: !diagnostico.pistasDeImagen.isEmpty)
+    }
+
+    /// Entre todo lo encontrado, el mejor: latino antes que de España (si se pidió latino)
+    /// y, dentro de eso, sincronizado antes que corregido antes que sin comprobar. Lo que no
+    /// va con el video no se instala nunca. Lo que el usuario ya rechazó, tampoco.
+    struct Eleccion {
+        let opciones: Opciones
+        let comprobador: Sincronia.Comprobador?
+        private(set) var mejor: (texto: String, origen: String, puntos: Int)?
+        private(set) var desfasados: [String] = []
+        private(set) var terminada = false
+        var vacia: Bool { mejor == nil }
+
+        init(opciones: Opciones, comprobador: Sincronia.Comprobador?) {
+            self.opciones = opciones
+            self.comprobador = comprobador
+        }
+
+        /// `true` = ya está el ideal, no hace falta bajar más.
+        @discardableResult
+        mutating func considerar(_ texto: String, origen: String, comprobar: Bool = true) -> Bool {
+            guard !terminada else { return true }
+            if opciones.descartados.contains(Motor.huella(texto)) { return false }
+            let latino = !opciones.preferirLatino || !TextoSRT.pareceDeEspaña(texto)
+            var final = texto, nota = "", rango = 3
+            if comprobar, let comprobador {
+                let veredicto = comprobador.comprobar(texto)
+                switch veredicto {
+                case .desfasado:
+                    desfasados.append(origen)
+                    return false
+                case .corregible(let ajuste, _):
+                    final = Sincronia.aplicar(ajuste, a: texto)
+                    // El mismo que ya se corrigió una vez y el usuario rechazó.
+                    if opciones.descartados.contains(Motor.huella(final)) { return false }
+                case .sincronizado, .sinComprobar:
+                    break
+                }
+                rango = veredicto.rango
+                nota = " · " + veredicto.resumen
+            }
+            let puntos = (latino ? 10 : 0) + rango
+            if puntos > (mejor?.puntos ?? -1) { mejor = (final, origen + nota, puntos) }
+            // Sin nada con qué comparar no tiene sentido seguir bajando: vale el primero latino.
+            terminada = latino && (rango == 3 || comprobador?.sinReferencia == true)
+            return terminada
+        }
+
+        func resultado(en destino: URL, retenerEspaña: Bool, soloImagen: Bool) -> Resultado {
+            if let mejor { return Motor.instalar(mejor.texto, origen: mejor.origen, en: destino, retenerEspaña: retenerEspaña) }
+            if !desfasados.isEmpty { return .desfasado(desfasados.joined(separator: ", ")) }
+            return .sinSubtitulos(soloImagen: soloImagen)
+        }
+    }
+
+    /// Huella de un subtítulo tal como queda instalado (limpio): así se reconoce el que
+    /// el usuario rechazó aunque vuelva a llegar crudo, con publicidad o etiquetas.
+    public static func huella(_ texto: String) -> String {
+        let limpio = TextoSRT.quitarPublicidad(
+            TextoSRT.depurarCaracteres(TextoSRT.quitarEtiquetasASS(texto).texto).texto).texto
+        return Sincronia.huella(limpio)
     }
 
     /// Limpia el texto y lo deja junto al video con el formato que el TV entiende.
     /// Lo que hubiera antes se aparta como «.anterior», nunca se pisa.
-    private static func instalar(_ texto: String, origen: String, en destino: URL,
+    static func instalar(_ texto: String, origen: String, en destino: URL,
                                  retenerEspaña: Bool = false) -> Resultado {
         let sinEtiquetas = TextoSRT.quitarEtiquetasASS(texto)
         let depurado = TextoSRT.depurarCaracteres(sinEtiquetas.texto)
@@ -288,6 +377,36 @@ public enum Motor {
         }
     }
 
+    /// Lo bajado de Subdivx (o soltado a mano) para UN video: de todos sus .srt se queda
+    /// con el que va sincronizado (y latino, si se pidió). Un paquete de Subdivx suele
+    /// traer varias versiones: la de WEB-DL y la de BluRay no van igual.
+    public static func adoptarComprobando(_ subtitulos: [URL], para video: URL, preferirLatino: Bool,
+                                          descartados: Set<String> = [], comprobar: Bool = true) -> Resultado {
+        var opciones = Opciones(preferirLatino: preferirLatino, retenerEspaña: preferirLatino,
+                                comprobarSincronia: comprobar, descartados: descartados)
+        opciones.forzar = true
+        var eleccion = Eleccion(opciones: opciones, comprobador: comprobar ? Sincronia.Comprobador(video: video) : nil)
+        var vistos = 0, problema: String?
+        for subtitulo in subtitulos {
+            do {
+                let (texto, codificacion) = try TextoSRT.leer(subtitulo)
+                // Lo bajado puede ser un aviso del sitio con extensión .srt: eso no compite.
+                guard TextoSRT.esSRT(texto), TextoSRT.pareceEspañol(texto) else { continue }
+                vistos += 1
+                if eleccion.considerar(texto, origen: "\(subtitulo.lastPathComponent) (\(codificacion))") { break }
+            } catch {
+                problema = error.localizedDescription
+            }
+        }
+        if vistos == 0 {
+            return .falló(problema ?? "«\(subtitulos.first?.lastPathComponent ?? "lo bajado")» no traía un subtítulo en español")
+        }
+        if eleccion.vacia, opciones.descartados.count > 0, eleccion.desfasados.isEmpty {
+            return .falló("es el mismo subtítulo que ya habías descartado")
+        }
+        return eleccion.resultado(en: destinoSRT(de: video), retenerEspaña: preferirLatino, soloImagen: false)
+    }
+
     static let extensionesDeArchivo: Set<String> = ["zip", "rar", "7z"]
 
     /// Los .srt que hay en lo que se soltó: sueltos, dentro de un .zip/.rar (se
@@ -340,24 +459,36 @@ public enum Motor {
     /// candidatos (Subdivx suele traer el de España y el latino juntos) gana el
     /// que no tiene vosotros y, a igualdad, el que dice «latin» en el nombre.
     public static func emparejar(_ subtitulos: [URL], con videos: [URL]) -> [(video: URL, subtitulo: URL)] {
+        repartir(subtitulos, con: videos).compactMap { par in par.subtitulos.first.map { (par.video, $0) } }
+    }
+
+    /// Como `emparejar`, pero con TODOS los candidatos de cada video, del mejor al peor,
+    /// para poder probar su sincronía uno por uno.
+    public static func repartir(_ subtitulos: [URL], con videos: [URL]) -> [(video: URL, subtitulos: [URL])] {
         func codigo(_ url: URL) -> String? {
             let (_, t, e) = OpenSubtitles.tituloLimpio(url)
             guard let t, let e else { return nil }
             return "\(t)x\(e)"
         }
+        var puntajes: [URL: Int] = [:]
         func puntaje(_ srt: URL) -> Int {
+            if let ya = puntajes[srt] { return ya }
             let texto = (try? TextoSRT.leer(srt).texto) ?? ""
             var n = 0
             // Si no es un .srt de verdad o no es español, no compite: antes un francés
             // le ganaba al de España, y un aviso de error del sitio pasaba por subtítulo.
-            guard TextoSRT.esSRT(texto), TextoSRT.pareceEspañol(texto) else { return -1 }
-            if !TextoSRT.pareceDeEspaña(texto) { n += 10 }
-            n += 5
-            if srt.lastPathComponent.range(of: "latin", options: .caseInsensitive) != nil { n += 2 }
+            if TextoSRT.esSRT(texto), TextoSRT.pareceEspañol(texto) {
+                if !TextoSRT.pareceDeEspaña(texto) { n += 10 }
+                n += 5
+                if srt.lastPathComponent.range(of: "latin", options: .caseInsensitive) != nil { n += 2 }
+            } else {
+                n = -1
+            }
+            puntajes[srt] = n
             return n
         }
 
-        var pares: [(video: URL, subtitulo: URL)] = []
+        var pares: [(video: URL, subtitulos: [URL])] = []
         for video in videos {
             let candidatos: [URL]
             if let suyo = codigo(video) {
@@ -366,9 +497,8 @@ public enum Motor {
             } else {
                 candidatos = videos.count == 1 ? subtitulos : []
             }
-            if let mejor = candidatos.max(by: { puntaje($0) < puntaje($1) }), puntaje(mejor) >= 0 {
-                pares.append((video, mejor))
-            }
+            let validos = candidatos.filter { puntaje($0) >= 0 }.sorted { puntaje($0) > puntaje($1) }
+            if !validos.isEmpty { pares.append((video, validos)) }
         }
         return pares
     }

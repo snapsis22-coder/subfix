@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 enum Pestaña: String, CaseIterable, Identifiable {
     case subtitulos = "Subtítulos"
     case organizar = "Organizar"
-    case vigilancia = "Vigilar"
+    case pistas = "Pistas"
 
     var id: Self { self }
 
@@ -15,7 +15,7 @@ enum Pestaña: String, CaseIterable, Identifiable {
         switch self {
         case .subtitulos: return "captions.bubble.fill"
         case .organizar: return "wand.and.stars"
-        case .vigilancia: return "eye.fill"
+        case .pistas: return "slider.horizontal.3"
         }
     }
 
@@ -23,14 +23,14 @@ enum Pestaña: String, CaseIterable, Identifiable {
         switch self {
         case .subtitulos: return "Deja los subtítulos listos para el televisor"
         case .organizar: return "Ordena tus películas y series para Jellyfin y Plex"
-        case .vigilancia: return "Procesa sola cada película nueva de una carpeta"
+        case .pistas: return "Mira y cambia los audios y subtítulos de cada película"
         }
     }
 }
 
 public struct VistaPrincipal: View {
     @StateObject private var cola = Cola()
-    @StateObject private var vigilante = Vigilante()
+    @StateObject private var pistas = ColaDePistas()
     @StateObject private var organizador = Organizador()
     @AppStorage("subfix.pestaña") private var pestaña = Pestaña.subtitulos
     @State private var entradaRevisada = false
@@ -38,7 +38,7 @@ public struct VistaPrincipal: View {
     public init() {}
 
     public var body: some View {
-        Ventana(pestaña: $pestaña, cola: cola, vigilante: vigilante, organizador: organizador)
+        Ventana(pestaña: $pestaña, cola: cola, pistas: pistas, organizador: organizador)
             .onAppear {
                 cargarDesdeArgumentos()
                 revisarEntradaSiToca(pestaña)
@@ -84,7 +84,7 @@ public struct VistaPrincipal: View {
 struct Ventana: View {
     @Binding var pestaña: Pestaña
     @ObservedObject var cola: Cola
-    @ObservedObject var vigilante: Vigilante
+    @ObservedObject var pistas: ColaDePistas
     @ObservedObject var organizador: Organizador
     @ObservedObject var actualizaciones = Actualizaciones.compartido
     /// ScrollView es AppKit y sale en blanco en los retratos: ahí se pintan las listas sin él.
@@ -94,12 +94,17 @@ struct Ventana: View {
         VStack(spacing: 0) {
             CabeceraSubFix(pestaña: $pestaña) { accesorio }
             AvisoDeActualizacion(modelo: actualizaciones,
-                                 ocupada: cola.trabajando || organizador.trabajando || vigilante.revisando)
+                                 ocupada: cola.trabajando || organizador.trabajando || pistas.trabajando)
             Group {
                 switch pestaña {
-                case .subtitulos: VistaPeliculas(cola: cola, entradaDeOrganizar: organizador.entrada, sinScroll: sinScroll)
+                case .subtitulos:
+                    VistaPeliculas(cola: cola, entradaDeOrganizar: organizador.entrada, sinScroll: sinScroll,
+                                   abrirEnPistas: { url in
+                                       pistas.agregar([url])
+                                       withAnimation(.easeOut(duration: 0.15)) { pestaña = .pistas }
+                                   })
                 case .organizar: VistaOrganizar(modelo: organizador, sinScroll: sinScroll)
-                case .vigilancia: VistaVigilancia(vigilante: vigilante, sinScroll: sinScroll)
+                case .pistas: VistaPistas(cola: pistas, sinScroll: sinScroll)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -120,13 +125,8 @@ struct Ventana: View {
             EmptyView()
         case .organizar:
             InterruptorAutomatico(encendido: $organizador.automatico)
-        case .vigilancia:
-            InterruptorAutomatico(encendido: $vigilante.activo, titulo: "Vigilar",
-                                  textoEncendido: "Revisa cada 30 segundos", icono: "eye",
-                                  ayuda: vigilante.carpeta == nil
-                                      ? "Primero elige la carpeta que quieres vigilar"
-                                      : "Procesa sola cada película que termine de bajar en la carpeta, mientras la app esté abierta",
-                                  activo: vigilante.carpeta != nil)
+        case .pistas:
+            EmptyView()
         }
     }
 }
@@ -323,8 +323,9 @@ struct VistaPeliculas: View {
     /// La entrada de «Organizar»: la que se revisa si no se eligió otra aquí.
     var entradaDeOrganizar: URL? = nil
     var sinScroll = false
+    /// «Modificar pistas…» de una fila: la lleva a la pestaña «Pistas».
+    var abrirEnPistas: (URL) -> Void = { _ in }
     @State private var encima = false
-    @State private var paraMKV: Fila?
     @State private var paraSubdivx: LoteSubdivx?
     @State private var filtro = Filtro.todas
     @State private var viendoOpciones = false
@@ -382,21 +383,15 @@ struct VistaPeliculas: View {
             return true
         }
         .animation(.easeInOut(duration: 0.15), value: encima)
-        .sheet(item: $paraMKV) { fila in
-            HojaDeMKV(video: fila.url, planActual: fila.plan,
-                      pendiente: fila.estado == .listaParaProcesar || fila.plan != nil,
-                      alGuardar: { cola.guardarPlan(fila.id, $0) },
-                      alCrear: { cola.mkvCreado(fila.id, $0) })
-        }
         .sheet(item: $paraSubdivx) { lote in
             HojaDeSubdivx(lote: lote) { archivo, id in
-                if let id { return cola.adoptarDescarga(archivo, para: id) }
-                return cola.adoptarDescarga(archivo, entre: lote.trabajos.map(\.id))
+                if let id { return await cola.probarDescarga(archivo, para: id) }
+                return await cola.probarDescarga(archivo, entre: lote.trabajos.map(\.id))
             }
         }
         // Al terminar de procesar, la cola pide Subdivx para los que quedaron sin latino.
         .onChange(of: cola.abrirSubdivxCon) { _, ids in
-            guard let ids, paraSubdivx == nil, paraMKV == nil else { return }
+            guard let ids, paraSubdivx == nil else { return }
             buscarEnSubdivx(cola.filas.filter { ids.contains($0.id) })
             cola.abrirSubdivxCon = nil
         }
@@ -503,10 +498,10 @@ struct VistaPeliculas: View {
     private func acciones(para fila: Fila) -> AccionesDeFila {
         AccionesDeFila(
             elegirPista: { cola.elegirPista(fila.id, indice: $0) },
-            abrirPistas: { paraMKV = fila },
+            abrirPistas: { abrirEnPistas(fila.url) },
             abrirSubdivx: { buscarEnSubdivx([fila]) },
             usarEspaña: { cola.usarEspaña(fila.id) },
-            reintentar: { cola.reintentar(fila.id) },
+            reprocesar: { cola.reprocesar(fila.id) },
             quitar: { cola.quitar(fila.id) })
     }
 
@@ -602,15 +597,6 @@ struct VistaPeliculas: View {
                 .help("En toda la lista: saca del archivo el subtítulo latino, lo limpia de publicidad y caracteres "
                       + "raros, lo deja como .srt al lado (el que el TV pone solo) y mete cada capítulo en su carpeta. Sin internet")
 
-                Button {
-                    cola.latinoPorDefectoEnTodos()
-                } label: {
-                    Label("Latino por defecto", systemImage: "globe.americas")
-                }
-                .buttonStyle(BotonSecundario(compacto: true))
-                .disabled(cola.trabajando || cola.paraLatinoPorDefecto.isEmpty)
-                .help("Sólo eso: en cada MKV de la lista deja automático el subtítulo latino y, si lo trae, "
-                      + "el audio latino. Cambia el mismo archivo (sólo la cabecera, en un segundo); no crea otro")
             }
 
             if !cola.faltanEnSubdivx.isEmpty {
@@ -772,7 +758,7 @@ public struct AccionesDeFila {
     var abrirPistas: () -> Void = {}
     var abrirSubdivx: () -> Void = {}
     var usarEspaña: () -> Void = {}
-    var reintentar: () -> Void = {}
+    var reprocesar: () -> Void = {}
     var quitar: () -> Void = {}
 
     static let ninguna = AccionesDeFila()
@@ -875,12 +861,18 @@ struct FilaDePelicula: View {
             .help("Abre Subdivx dentro de SubFix, busca «\(TrabajoSubdivx(fila: fila).busqueda)» y baja solo el latino. "
                   + "Si sale «Verifica que eres humano», márcalo tú")
         case .fallada:
-            Button(action: acciones.reintentar) {
-                Label("Reintentar", systemImage: "arrow.clockwise")
+            Button(action: acciones.reprocesar) {
+                Label("Reprocesar", systemImage: "arrow.clockwise")
             }
             .buttonStyle(BotonSecundario(compacto: true))
-            .help("Vuelve a dejarla pendiente para el próximo «Procesar»")
+            .help("Vuelve a buscarle subtítulo ahora, sin vaciar la lista")
         case .hecha:
+            Button(action: acciones.reprocesar) {
+                Label("Reprocesar", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(BotonSecundario(compacto: true))
+            .help("¿Quedó mal (desfasado, otro idioma)? Busca OTRO subtítulo: el que tiene no se vuelve a elegir "
+                  + "y sólo se aparta como «.anterior» si aparece uno mejor")
             Button {
                 NSWorkspace.shared.activateFileViewerSelecting([fila.archivoParaMostrar])
             } label: {
@@ -888,12 +880,6 @@ struct FilaDePelicula: View {
             }
             .buttonStyle(BotonSecundario(compacto: true))
             .help("Mostrar «\(fila.archivoParaMostrar.lastPathComponent)» en el Finder")
-        case .listaParaProcesar where fila.plan != nil:
-            Button(action: acciones.abrirPistas) {
-                Label("Pistas ✓", systemImage: "slider.horizontal.3")
-            }
-            .buttonStyle(BotonSecundario(compacto: true))
-            .help("Ya armaste el MKV de esta fila: «Procesar» lo crea. Toca para cambiarlo")
         default:
             EmptyView()
         }
@@ -927,8 +913,8 @@ struct MenuDeFila: View {
     let acciones: AccionesDeFila
 
     var body: some View {
-        if !fila.terminada, fila.estado != .procesando {
-            Button(fila.plan == nil ? "Pistas del MKV…" : "Cambiar las pistas del MKV…", action: acciones.abrirPistas)
+        if fila.porRevisar || fila.terminada {
+            Button("Reprocesar (buscar otro subtítulo)", action: acciones.reprocesar)
         }
         if let diagnostico = fila.diagnostico, diagnostico.pistas.filter(\.esTexto).count > 1,
            fila.estado == .listaParaProcesar {
@@ -947,10 +933,8 @@ struct MenuDeFila: View {
         if fila.candidatoEspaña != nil {
             Button("Usar el de España", action: acciones.usarEspaña)
         }
-        if fila.porRevisar {
-            Button("Volver a procesar", action: acciones.reintentar)
-        }
         Divider()
+        Button("Modificar pistas…", action: acciones.abrirPistas)
         Button("Mostrar en el Finder") {
             NSWorkspace.shared.activateFileViewerSelecting([fila.archivoParaMostrar])
         }
@@ -964,100 +948,6 @@ extension Fila {
         if let listo = archivoListo, FileManager.default.fileExists(atPath: listo.path) { return listo }
         let srt = Motor.destinoSRT(de: url)
         return FileManager.default.fileExists(atPath: srt.path) ? srt : url
-    }
-}
-
-// MARK: - Vigilancia
-
-struct VistaVigilancia: View {
-    @ObservedObject var vigilante: Vigilante
-    var sinScroll = false
-    @State private var eligiendoCarpeta = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 16) {
-                TarjetaCarpeta(icono: "tray.and.arrow.down.fill", titulo: "Carpeta vigilada", color: Tema.ambar,
-                               url: vigilante.carpeta) { eligiendoCarpeta = true }
-                    .frame(maxWidth: 360)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(vigilante.activo ? "Vigilando" : (vigilante.carpeta == nil ? "Elige una carpeta" : "Apagada"))
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(vigilante.activo ? Tema.verde : Tema.tinta)
-                    Text("Cada 30 segundos mira la carpeta y procesa sola cada película que termine de bajar, "
-                         + "con las mismas opciones de «Subtítulos». Te avisa con una notificación.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Tema.tintaSuave)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 18)
-
-            if vigilante.historial.isEmpty {
-                VStack(spacing: 14) {
-                    ZStack {
-                        Circle().fill(Tema.morado.opacity(0.10)).frame(width: 100, height: 100)
-                        Image(systemName: vigilante.activo ? "eye.fill" : "eye.slash.fill")
-                            .font(.system(size: 38, weight: .medium))
-                            .foregroundStyle(Tema.degradado)
-                            .symbolEffect(.pulse, isActive: vigilante.activo)
-                    }
-                    Text(vigilante.activo
-                         ? "Vigilando. Las películas nuevas se procesarán solas."
-                         : "La vigilancia está apagada. Enciéndela arriba a la derecha.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Tema.tintaSuave)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if sinScroll {
-                historial.frame(maxHeight: .infinity, alignment: .top)
-            } else {
-                ScrollView { historial }
-            }
-        }
-        .fileImporter(isPresented: $eligiendoCarpeta, allowedContentTypes: [.folder]) { resultado in
-            if case .success(let url) = resultado { vigilante.carpeta = url }
-        }
-    }
-
-    private var historial: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("LO ÚLTIMO")
-                .font(.system(size: 10.5, weight: .bold))
-                .tracking(0.8)
-                .foregroundStyle(Tema.acento)
-                .padding(.leading, 4)
-            ForEach(vigilante.historial) { anotacion in
-                HStack(alignment: .center, spacing: 12) {
-                    Image(systemName: anotacion.bien ? "checkmark" : "exclamationmark")
-                        .font(.system(size: 13, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(anotacion.bien ? Tema.verde : Tema.ambar))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(anotacion.nombre)
-                            .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Tema.tinta)
-                            .lineLimit(1).truncationMode(.middle)
-                        Text(anotacion.texto)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Tema.tintaSuave)
-                            .lineLimit(2)
-                    }
-                    Spacer()
-                    Text(anotacion.cuando, style: .relative)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Tema.tintaSuave.opacity(0.8))
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .tarjeta(radio: 14)
-            }
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
     }
 }
 

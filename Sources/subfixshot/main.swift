@@ -57,7 +57,13 @@ MainActor.assumeIsolated {
         retratar(Retratos.peliculas(cola), "2-con-peliculas", en: salida)
     }
 
-    retratar(Retratos.vigilancia(Vigilante()), "3-vigilancia", en: salida)
+    let pistas = ColaDePistas()
+    retratar(Retratos.pistas(pistas), "3-pistas-vacia", en: salida)
+    if !peliculas.isEmpty {
+        pistas.agregar(Array(peliculas))
+        RunLoop.main.run(until: Date().addingTimeInterval(4))
+        retratar(Retratos.pistas(pistas), "3-pistas", en: salida)
+    }
     retratar(Retratos.barras(), "4-barras", en: salida, ancho: 640, alto: 300)
     retratar(Retratos.tiraDelSello(), "6-sello", en: salida, ancho: 640, alto: 150)
     retratar(Retratos.filasDeEjemplo(), "7-filas", en: salida, ancho: 1000, alto: 440)

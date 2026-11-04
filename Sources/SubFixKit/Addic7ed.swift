@@ -75,25 +75,34 @@ public enum Addic7ed {
     // MARK: - Búsqueda
 
     public static func buscarLatino(para video: URL) async -> Hallazgo? {
+        var primero: Hallazgo?
+        await candidatosLatinos(para: video) { primero = $0; return true }
+        return primero
+    }
+
+    /// Las versiones latinas completas, de la que mejor casa con el archivo a la peor,
+    /// hasta que `alEncontrar` diga basta (`true`) o se hayan pedido `limite` descargas:
+    /// el cupo diario de Addic7ed es corto.
+    public static func candidatosLatinos(para video: URL, limite: Int = 4,
+                                         _ alEncontrar: (Hallazgo) -> Bool) async {
         let (titulo, temporada, episodio) = OpenSubtitles.tituloLimpio(video)
-        guard !titulo.isEmpty, let temporada, let episodio else { return nil }
+        guard !titulo.isEmpty, let temporada, let episodio else { return }
 
         let pagina = "\(base)/serie/\(nombreEnURL(titulo))/\(temporada)/\(episodio)/\(idiomaLatino)"
-        guard let html = try? await pedir(pagina, referer: base) else { return nil }
+        guard let html = try? await pedir(pagina, referer: base) else { return }
 
         let fichas = Set(video.lastPathComponent.lowercased()
             .components(separatedBy: CharacterSet(charactersIn: ". _-[]")))
         let candidatas = versiones(en: html).filter { $0.completa && $0.idioma == rotuloLatino }
             .sorted { puntaje($0, fichas: fichas) > puntaje($1, fichas: fichas) }
 
-        for version in candidatas {
+        for version in candidatas.prefix(limite) {
             guard let texto = try? await pedir(base + version.enlace, referer: pagina),
                   TextoSRT.esSRT(texto),      // al pasar el cupo diario llega una página HTML
                   TextoSRT.pareceEspañol(texto)  // la etiqueta del sitio la pone quien sube
             else { continue }
-            return Hallazgo(texto: texto, version: version.nombre)
+            if alEncontrar(Hallazgo(texto: texto, version: version.nombre)) { return }
         }
-        return nil
     }
 
     /// Sin el Referer de la página del episodio, la descarga redirige a la portada.

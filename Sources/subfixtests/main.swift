@@ -665,11 +665,7 @@ await probarEsperando("lo bajado a mano en un lote va al capítulo que le corres
     let c = await MainActor.run { Cola() }
     await MainActor.run { c.agregar([e2, e3]) }
     let ids = await MainActor.run { c.filas.map(\.id) }
-    let tomado = await MainActor.run { c.adoptarDescarga(srtLatino, entre: ids) }
-    for _ in 0..<50 {
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        if FileManager.default.fileExists(atPath: Motor.destinoSRT(de: e2).path) { break }
-    }
+    let tomado = await c.probarDescarga(srtLatino, entre: ids) == .latino
     return tomado && FileManager.default.fileExists(atPath: Motor.destinoSRT(de: e2).path)
         && !FileManager.default.fileExists(atPath: Motor.destinoSRT(de: e3).path)
 }
@@ -850,23 +846,21 @@ await probarEsperando("soltar el .zip de Subdivx instala el latino y quita el av
 await probarEsperando("ventana de Subdivx: una descarga sin .srt no se adopta") {
     let basura = temporal.appendingPathComponent("pagina.html")
     try? "<html><body>Publicidad</body></html>".write(to: basura, atomically: true, encoding: .utf8)
-    return await MainActor.run {
-        guard let id = cola.filas.first?.id else { return false }
-        return !cola.adoptarDescarga(basura, para: id)
-    }
+    guard let id = await MainActor.run(body: { cola.filas.first?.id }) else { return false }
+    return await cola.probarDescarga(basura, para: id) == .nada
 }
 
-await MainActor.run { _ = cola.filas.first.map { cola.adoptarDescarga(srtEspaña, para: $0.id) } }
-for _ in 0..<50 {
-    try? await Task.sleep(nanoseconds: 100_000_000)
-    if await MainActor.run(body: { cola.filas.first?.avisa == true }) { break }
+await probarEsperando("ventana de Subdivx: un paquete sólo de España no se pone y se sigue probando") {
+    guard let id = await MainActor.run(body: { cola.filas.first?.id }) else { return false }
+    // La fila ya tiene el latino puesto (del .zip soltado antes): el de España no lo pisa.
+    let prueba = await cola.probarDescarga(srtEspaña, para: id)
+    let texto = (try? TextoSRT.leer(Motor.destinoSRT(de: videoDePrueba)).texto) ?? ""
+    return prueba == .soloEspaña && texto.contains("ustedes")
 }
-await MainActor.run { _ = cola.filas.first.map { cola.adoptarDescarga(zipBajado, para: $0.id) } }
-for _ in 0..<50 {
-    try? await Task.sleep(nanoseconds: 100_000_000)
-    if await MainActor.run(body: { cola.filas.first?.terminada == true }) { break }
-}
+
 await probarEsperando("ventana de Subdivx: el .zip bajado se instala en su fila y gana el latino") {
+    guard let id = await MainActor.run(body: { cola.filas.first?.id }),
+          await cola.probarDescarga(zipBajado, para: id) == .latino else { return false }
     let bien = await MainActor.run { cola.filas.first?.terminada == true }
     let texto = (try? TextoSRT.leer(Motor.destinoSRT(de: videoDePrueba)).texto) ?? ""
     return bien && texto.contains("ustedes")
@@ -1317,6 +1311,7 @@ if let completo = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(wh
 }
 
 pruebasDeOrganizar()
+await pruebasDeSincronia(en: temporal)
 await pruebasDeActualizar()
 
 print("\n\(pasadas) pasadas, \(falladas) falladas\n")

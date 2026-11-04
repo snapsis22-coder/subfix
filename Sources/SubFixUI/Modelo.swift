@@ -26,6 +26,10 @@ public struct Fila: Identifiable, Equatable {
     /// El de España que apareció cuando se buscaba latino: apartado, sin instalar,
     /// hasta que el usuario pulse «Usar el de España».
     public internal(set) var candidatoEspaña: URL?
+    /// Huellas de los subtítulos que el usuario rechazó con «Reprocesar»: no se vuelven a poner.
+    var descartados: Set<String> = []
+    /// «Reprocesar»: buscar aunque ya tenga .srt (el que tiene se aparta sólo si aparece otro).
+    var forzar = false
 
     enum Estado: Equatable {
         case analizando
@@ -78,6 +82,8 @@ public struct Fila: Identifiable, Equatable {
     public var avisa: Bool { if case .avisada = estado { return true } else { return false } }
     public var terminada: Bool { if case .hecha = estado { return true } else { return false } }
     public var fallo: Bool { if case .fallada = estado { return true } else { return false } }
+    /// El texto de la fila tal como se ve («1.234 líneas · …», «sólo hay de España…»).
+    public var detalle: String? { estado.detalle }
     /// Lo que el usuario tiene que mirar: avisos en naranja y fallos.
     public var porRevisar: Bool { avisa || fallo }
     public var esEpisodio: Bool { Motor.carpetaDeCapitulo(para: url) != nil }
@@ -231,36 +237,42 @@ public final class Cola: ObservableObject {
         cambiar(id) { $0.pistaElegida = indice }
     }
 
-    /// Lo bajado en la ventana de Subdivx: ya se sabe de qué fila es.
-    /// `false` si no traía ningún .srt.
-    public func adoptarDescarga(_ archivo: URL, para id: UUID) -> Bool {
-        adoptarDescarga(archivo, entre: [id])
+    /// Qué pasó al probar lo bajado de Subdivx: la ventana sigue con el siguiente si no sirvió.
+    public enum Prueba: Equatable {
+        case latino        // quedó puesto: latino (o el que se pidió) y sincronizado o corregido
+        case soloEspaña    // sólo traía el de España: apartado para «Usar el de España»
+        case desfasado     // traía subtítulo, pero no va con este video
+        case nada          // no traía un .srt para esta fila
     }
 
-    /// Lo bajado a mano en la ventana de Subdivx cuando no se sabe para cuál de sus filas era:
-    /// se empareja por SxxEyy entre ellas.
-    public func adoptarDescarga(_ archivo: URL, entre ids: [UUID]) -> Bool {
-        let subtitulos = Motor.subtitulos(en: [archivo])
+    /// Lo bajado en la ventana de Subdivx para una fila: se prueba y, si sirve, se instala.
+    public func probarDescarga(_ archivo: URL, para id: UUID) async -> Prueba {
+        await probarDescarga(archivo, entre: [id])
+    }
+
+    /// Lo bajado cuando no se sabe para cuál de sus filas era: se reparte por SxxEyy.
+    public func probarDescarga(_ archivo: URL, entre ids: [UUID]) async -> Prueba {
+        let subtitulos = await Task.detached { Motor.subtitulos(en: [archivo]) }.value
         let suyas = filas.filter { ids.contains($0.id) }
-        guard !subtitulos.isEmpty, !suyas.isEmpty,
-              !Motor.emparejar(subtitulos, con: suyas.map(\.url)).isEmpty else { return false }
-        adoptar(subtitulos, solo: ids)
-        return true
+        var mejor = Prueba.nada
+        for par in Motor.repartir(subtitulos, con: suyas.map(\.url)) {
+            guard let fila = filas.first(where: { $0.url == par.video }) else { continue }
+            let prueba = await adoptarComprobando(fila.id, par.subtitulos)
+            if [Prueba.latino, .soloEspaña, .desfasado, .nada].firstIndex(of: prueba)!
+                < [Prueba.latino, .soloEspaña, .desfasado, .nada].firstIndex(of: mejor)! { mejor = prueba }
+        }
+        return mejor
     }
 
     /// Las que quedaron en naranja: sin latino (o sólo con el de España).
     public var faltanEnSubdivx: [Fila] { filas.filter(\.avisa) }
 
-    private func adoptar(_ subtitulos: [URL], solo ids: [UUID]? = nil) {
-        var pares: [(video: URL, subtitulo: URL)]
-        if let ids {
-            pares = Motor.emparejar(subtitulos, con: filas.filter { ids.contains($0.id) }.map(\.url))
-        } else {
-            // Primero los que avisaron que les falta; si ninguno casa, cualquiera.
-            let avisadas = filas.filter { if case .avisada = $0.estado { return true } else { return false } }
-            pares = Motor.emparejar(subtitulos, con: avisadas.map(\.url))
-            if pares.isEmpty { pares = Motor.emparejar(subtitulos, con: filas.map(\.url)) }
-        }
+    /// Un .srt/.zip soltado en la ventana o elegido con «Añadir…»: se le busca dueño.
+    private func adoptar(_ subtitulos: [URL]) {
+        // Primero los que avisaron que les falta; si ninguno casa, cualquiera.
+        let avisadas = filas.filter(\.avisa)
+        var pares = Motor.repartir(subtitulos, con: avisadas.map(\.url))
+        if pares.isEmpty { pares = Motor.repartir(subtitulos, con: filas.map(\.url)) }
 
         guard !pares.isEmpty else {
             let nombre = subtitulos.first?.lastPathComponent ?? "el subtítulo"
@@ -270,24 +282,47 @@ public final class Cola: ObservableObject {
             return
         }
         aviso = nil
-        let organizarlos = organizar
-        let latino = preferirLatino
-
         for par in pares {
             guard let fila = filas.first(where: { $0.url == par.video }) else { continue }
-            let id = fila.id
-            let esEpisodio = fila.diagnostico?.esEpisodio ?? (Motor.carpetaDeCapitulo(para: fila.url) != nil)
-            cambiar(id) { $0.estado = .procesando }
-            Task.detached(priority: .userInitiated) {
-                let resultado = Motor.adoptar(par.subtitulo, para: par.video, retenerEspaña: latino)
-                let final = await self.ordenar(id, par.video, resultado, esEpisodio: esEpisodio,
-                                               organizar: organizarlos, preferirLatino: latino)
-                await MainActor.run {
-                    self.cambiar(id) { $0.estado = final }
-                    Motor.limpiarFantasmas(en: [self.filas.first { $0.id == id }?.url.deletingLastPathComponent()
-                                                ?? par.video.deletingLastPathComponent()])
-                }
+            Task { await adoptarComprobando(fila.id, par.subtitulos) }
+        }
+    }
+
+    /// De varios .srt para una fila, instala el que va sincronizado (y latino, si se pidió).
+    /// Si ninguno sirve, la fila se queda como estaba: lo que ya tenía no se toca.
+    @discardableResult
+    private func adoptarComprobando(_ id: UUID, _ subtitulos: [URL]) async -> Prueba {
+        guard let fila = filas.first(where: { $0.id == id }), fila.estado != .procesando else { return .nada }
+        let video = fila.url, antes = fila.estado, descartados = fila.descartados
+        let latino = preferirLatino, organizarlos = organizar
+        let esEpisodio = fila.diagnostico?.esEpisodio ?? (Motor.carpetaDeCapitulo(para: video) != nil)
+        cambiar(id) { $0.estado = .procesando }
+        let resultado = await Task.detached(priority: .userInitiated) {
+            Motor.adoptarComprobando(subtitulos, para: video, preferirLatino: latino, descartados: descartados)
+        }.value
+        defer { Motor.limpiarFantasmas(en: [filas.first { $0.id == id }?.url.deletingLastPathComponent()
+                                           ?? video.deletingLastPathComponent()]) }
+        switch resultado {
+        case .listo, .reparado, .yaEstaba:
+            let final = ordenar(id, video, resultado, esEpisodio: esEpisodio, organizar: organizarlos, preferirLatino: latino)
+            cambiar(id) { $0.estado = final; $0.forzar = false }
+            return .latino
+        case .soloEspaña:
+            // Si ya había uno de España apartado, no se pisa con otro: se sigue buscando.
+            // (El .srt que ya estuviera puesto nunca se toca: el de España queda aparte.)
+            if fila.candidatoEspaña != nil {
+                cambiar(id) { $0.estado = antes }
+            } else {
+                let final = ordenar(id, video, resultado, esEpisodio: esEpisodio, organizar: organizarlos, preferirLatino: latino)
+                cambiar(id) { $0.estado = final }
             }
+            return .soloEspaña
+        case .desfasado:
+            cambiar(id) { $0.estado = fila.terminada || fila.candidatoEspaña != nil ? antes : Self.traducir(resultado) }
+            return .desfasado
+        case .sinSubtitulos, .falló:
+            cambiar(id) { $0.estado = antes }
+            return .nada
         }
     }
 
@@ -430,13 +465,22 @@ public final class Cola: ObservableObject {
         revisarDescargas(porDefecto)
     }
 
-    /// Una fila que falló vuelve a quedar pendiente (conserva su plan de MKV, si lo tenía).
-    public func reintentar(_ id: UUID) {
-        cambiar(id) { fila in
-            guard fila.fallo || fila.avisa else { return }
-            fila.estado = .listaParaProcesar
-            fila.progreso = nil
+    /// «Reprocesar»: vuelve a buscar el subtítulo de esta fila sin vaciar la lista. Si ya
+    /// tenía uno puesto, se marca como rechazado (no vuelve a salir, venga de donde venga)
+    /// y se aparta como «.anterior» sólo cuando aparezca otro; si no aparece, se queda.
+    public func reprocesar(_ id: UUID) {
+        guard let fila = filas.first(where: { $0.id == id }),
+              fila.estado != .procesando, fila.estado != .analizando else { return }
+        let puesto = Motor.destinoSRT(de: fila.url)
+        let huella = (try? TextoSRT.leer(puesto).texto).flatMap { TextoSRT.esSRT($0) ? Motor.huella($0) : nil }
+        cambiar(id) { f in
+            if let huella { f.descartados.insert(huella) }
+            f.forzar = huella != nil
+            f.estado = .listaParaProcesar
+            f.candidatoEspaña = nil
+            f.progreso = nil
         }
+        if !trabajando { procesarTodo(solo: [id]) }
     }
 
     public var hayCapitulosPorOrganizar: Bool {
@@ -487,10 +531,10 @@ public final class Cola: ObservableObject {
         }
     }
 
-    public func procesarTodo() {
+    public func procesarTodo(solo ids: [UUID]? = nil) {
         guard !trabajando else { return }
         trabajando = true
-        let porHacer = pendientes
+        let porHacer = pendientes.filter { ids?.contains($0.id) ?? true }
         let red = usarRed
         let latino = preferirLatino
         let organizarlos = organizar
@@ -515,15 +559,24 @@ public final class Cola: ObservableObject {
                     }
                     continue
                 }
-                let opciones = Motor.Opciones(usarRed: red, forzar: false,
+                let opciones = Motor.Opciones(usarRed: red, forzar: fila.forzar,
                                               pistaPreferida: fila.pistaElegida,
                                               preferirLatino: latino, extraerDelArchivo: extraer,
-                                              retenerEspaña: latino)
+                                              retenerEspaña: latino, descartados: fila.descartados)
                 let resultado = await Motor.procesar(fila.url, opciones: opciones)
-                let estado = ordenar(fila.id, fila.url, resultado,
+                var estado = ordenar(fila.id, fila.url, resultado,
                                      esEpisodio: fila.diagnostico?.esEpisodio == true,
                                      organizar: organizarlos, preferirLatino: latino)
-                cambiar(fila.id) { $0.estado = estado }
+                // Reprocesando: si no apareció otro, el de antes sigue puesto. Decirlo.
+                if fila.forzar, !resultado.fueBien,
+                   FileManager.default.fileExists(atPath: Motor.destinoSRT(de: fila.url).path) {
+                    switch estado {
+                    case .avisada(let t): estado = .avisada(t + " · sigue puesto el que tenía")
+                    case .fallada(let t): estado = .fallada(t + " · sigue puesto el que tenía")
+                    default: break
+                    }
+                }
+                cambiar(fila.id) { $0.estado = estado; $0.forzar = false }
             }
             let carpetas = Set(porHacer.compactMap { hecha in
                 filas.first { $0.id == hecha.id }?.url.deletingLastPathComponent()
@@ -664,6 +717,11 @@ public final class Cola: ObservableObject {
                 : "no encontré subtítulo en español")
         case .soloEspaña(let origen, _):
             return .avisada("sólo hay de España (\(origen)) — no lo puse hasta que lo apruebes")
+        case .desfasado(let origenes):
+            let cuantos = origenes.components(separatedBy: ", ").count
+            return .avisada(cuantos == 1
+                ? "el que encontré no va sincronizado con este video (\(origenes)) — no lo puse"
+                : "los \(cuantos) que encontré no van sincronizados con este video — no puse ninguno")
         case .falló(let motivo):
             return .fallada(motivo)
         }

@@ -13,6 +13,10 @@
 # Efecto secundario útil: sin x264/x265 no entra código GPL, así que lo que se
 # empaqueta es LGPL 2.1.
 #
+# Los decodificadores de AUDIO son para comprobar la sincronía de un subtítulo
+# bajado cuando el video no trae ninguna pista de texto con que compararlo: se
+# saca el audio a 8 kHz mono y se busca dónde hablan (`Sincronia.swift`).
+#
 # ⚠️ Los decodificadores de VIDEO no son para decodificar: sin ellos ffmpeg no puede
 # averiguar cuántos fotogramas B hay que reordenar (`has_b_frames`), supone cero y, al
 # copiar un MKV, reescribe las marcas de tiempo mal («Non-monotonic DTS … changing to»).
@@ -30,7 +34,7 @@ echo "▸ Descargando ffmpeg $VERSION…"
 mkdir -p "$TRABAJO"
 curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz" | tar xJ -C "$TRABAJO" --strip-components=1
 
-echo "▸ Configurando (subtítulos + remux a MKV)…"
+echo "▸ Configurando (subtítulos + remux a MKV + audio para comprobar la sincronía)…"
 cd "$TRABAJO"
 ./configure \
     --prefix="$TRABAJO/instalado" \
@@ -48,6 +52,11 @@ cd "$TRABAJO"
     --enable-decoder=h264,hevc,mpeg2video,mpeg4,vp8,vp9,vc1 \
     --enable-encoder=subrip,srt,ass,ssa,webvtt,movtext \
     --enable-muxer=srt,ass,webvtt,matroska \
+    --enable-decoder=aac,aac_latm,ac3,eac3,dca,truehd,mlp,opus,vorbis,flac,mp3,mp2,alac \
+    --enable-decoder=pcm_s16le,pcm_s24le,pcm_s16be,pcm_bluray,pcm_dvd \
+    --enable-encoder=pcm_s16le --enable-muxer=pcm_s16le \
+    --enable-filter=aresample,aformat,anull,pan,highpass,lowpass \
+    --enable-swresample \
     --enable-parsers --enable-bsfs \
     --enable-protocol=file,pipe \
     > /dev/null

@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "SubFix", targets: ["SubFix"]),
         .executable(name: "subfixtests", targets: ["subfixtests"]),
         .executable(name: "subfixshot", targets: ["subfixshot"]),
+        .executable(name: "subfixsync", targets: ["subfixsync"]),
     ],
     targets: [
         // Motor: sondeo con ffprobe, extracción, formato para el TV y
@@ -30,5 +31,7 @@ let package = Package(
         .executableTarget(name: "subfixtests", dependencies: ["SubFixKit", "SubFixUI", "OrganizarKit"]),
         // Retratos de la interfaz a PNG, para revisarla sin permiso de captura.
         .executableTarget(name: "subfixshot", dependencies: ["SubFixUI"]),
+        // Calibra la comprobación de sincronía contra películas reales.
+        .executableTarget(name: "subfixsync", dependencies: ["SubFixKit"]),
     ]
 )

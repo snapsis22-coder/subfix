@@ -49,12 +49,13 @@ struct LoteSubdivx: Identifiable {
 /// Su Cloudflare bloquea a los programas (`403 cf-mitigated: challenge`) y eso no se
 /// esquiva: esto es un navegador de verdad, a la vista, y si aparece «Verifica que eres
 /// humano» lo marca el usuario. Hecho eso, SubFix usa la página como lo haría una
-/// persona: escribe la búsqueda, elige el resultado de ese capítulo y baja su .srt
-/// latino, uno por uno y respetando el ritmo que el propio sitio pide.
+/// persona: escribe la búsqueda y va bajando los resultados de ese capítulo, del más
+/// probable al menos, hasta dar con uno latino que vaya sincronizado con el video.
+/// Lo de «latino» se decide leyendo el texto (el vosotros), no por cómo se llama el archivo.
 struct HojaDeSubdivx: View {
     let lote: LoteSubdivx
-    /// Lo bajado y la fila a la que va (nil si se bajó a mano y no se sabe). `true` si traía .srt.
-    let alDescargar: (URL, UUID?) -> Bool
+    /// Prueba lo bajado para una fila (nil si se bajó a mano y no se sabe) y lo instala si sirve.
+    let alProbar: (URL, UUID?) async -> Cola.Prueba
     @Environment(\.dismiss) private var cerrar
     @StateObject private var navegador = Navegador()
 
@@ -103,7 +104,7 @@ struct HojaDeSubdivx: View {
         }
         .frame(width: lote.trabajos.count > 1 ? 1180 : 1000, height: 740)
         .onAppear {
-            navegador.alDescargar = alDescargar
+            navegador.alProbar = alProbar
             navegador.alTerminarBien = { cerrar() }
             navegador.empezar(lote.trabajos)
         }
@@ -134,7 +135,7 @@ struct HojaDeSubdivx: View {
         case .pendiente: Image(systemName: "circle.dashed").foregroundStyle(.secondary)
         case .buscando: ProgressView().controlSize(.small)
         case .bajado: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .sinLatino, .noEncontrado: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        case .sinLatino, .noEncontrado, .desfasado: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         case .fallo: Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
         }
     }
@@ -152,6 +153,7 @@ final class Navegador: NSObject, ObservableObject {
         case pendiente, buscando
         case bajado(String)
         case sinLatino
+        case desfasado
         case noEncontrado
         case fallo(String)
 
@@ -160,7 +162,8 @@ final class Navegador: NSObject, ObservableObject {
             case .pendiente: return nil
             case .buscando: return "buscando…"
             case .bajado(let archivo): return archivo
-            case .sinLatino: return "en Subdivx no hay latino"
+            case .sinLatino: return "en Subdivx sólo está el de España"
+            case .desfasado: return "los de Subdivx no van sincronizados con este video"
             case .noEncontrado: return "no está en Subdivx"
             case .fallo(let motivo): return motivo
             }
@@ -170,6 +173,9 @@ final class Navegador: NSObject, ObservableObject {
     static let inicio = "https://www.subdivx.com/"
     /// El sitio responde «espera unos segundos antes de realizar otra búsqueda» si se va más rápido.
     static let pausaEntreBusquedas: TimeInterval = 8
+    /// Cuántos resultados se bajan como mucho por película, y con qué calma.
+    static let maximoDePaquetes = 5
+    static let pausaEntreDescargas: TimeInterval = 3
 
     let web: WKWebView
     @Published var puedeVolver = false
@@ -177,7 +183,7 @@ final class Navegador: NSObject, ObservableObject {
     @Published private(set) var resultados: [UUID: Resultado] = [:]
     @Published private(set) var recorriendo = false
     @Published private(set) var terminado = false
-    var alDescargar: ((URL, UUID?) -> Bool)?
+    var alProbar: ((URL, UUID?) async -> Cola.Prueba)?
     var alTerminarBien: (() -> Void)?
 
     private var trabajos: [TrabajoSubdivx] = []
@@ -243,6 +249,7 @@ final class Navegador: NSObject, ObservableObject {
         func cuantos(_ es: (Resultado) -> Bool) -> Int { todos.filter(es).count }
         let bajados = cuantos { if case .bajado = $0 { return true } else { return false } }
         let sinLatino = cuantos { $0 == .sinLatino }
+        let desfasados = cuantos { $0 == .desfasado }
         let noEstan = cuantos { $0 == .noEncontrado }
         let fallos = cuantos { if case .fallo = $0 { return true } else { return false } }
         if bajados == todos.count {
@@ -253,7 +260,8 @@ final class Navegador: NSObject, ObservableObject {
             }
         } else {
             let partes = [bajados > 0 ? "\(bajados) con latino" : nil,
-                          sinLatino > 0 ? "\(sinLatino) sin latino en Subdivx" : nil,
+                          sinLatino > 0 ? "\(sinLatino) sólo con el de España" : nil,
+                          desfasados > 0 ? "\(desfasados) sin uno sincronizado" : nil,
                           noEstan > 0 ? "\(noEstan) no está\(noEstan == 1 ? "" : "n") en Subdivx" : nil,
                           fallos > 0 ? "\(fallos) con error" : nil].compactMap { $0 }
             estado = "Terminé: " + partes.joined(separator: ", ")
@@ -291,22 +299,34 @@ final class Navegador: NSObject, ObservableObject {
 
             registroSubdivx.notice("""
                 \(trabajo.busqueda, privacy: .public) → \(respuesta["estado"] as? String ?? "?", privacy: .public) \
-                \(respuesta["archivo"] as? String ?? "", privacy: .public) \(respuesta["mensaje"] as? String ?? "", privacy: .public)
+                \((respuesta["candidatos"] as? [Any])?.count ?? 0, privacy: .public) candidatos \(respuesta["mensaje"] as? String ?? "", privacy: .public)
                 """)
             switch respuesta["estado"] as? String {
-            case "archivo":
+            case "candidatos":
                 // Se baja el paquete entero, como el botón «Bajar subtítulo ahora»: el atajo
-                // de un solo archivo (`dc=1&archivo=…`) falla con eñes y tildes y devuelve
-                // «No se pudo extraer el archivo. Error técnico.». Del paquete, SubFix se
-                // queda con el latino (`Motor.emparejar`).
-                let archivo = respuesta["archivo"] as? String ?? "subtítulo"
-                if let id = respuesta["id"] as? String, id.allSatisfy(\.isNumber) {
-                    estado = "Bajando «\(respuesta["titulo"] as? String ?? trabajo.busqueda)»…"
-                    if let bajado = await bajar(paquete: id), alDescargar?(bajado, trabajo.id) == true {
-                        return .bajado(archivo)
+                // de un solo archivo (`dc=1&archivo=…`) falla con eñes y tildes. De cada
+                // paquete, SubFix lee los .srt y se queda con el latino que va sincronizado.
+                let lista = (respuesta["candidatos"] as? [[String: Any]] ?? []).prefix(Self.maximoDePaquetes)
+                var vioEspaña = false, vioDesfasado = false
+                for (i, candidato) in lista.enumerated() {
+                    if detenido { return .pendiente }
+                    guard let id = candidato["id"] as? String, id.allSatisfy(\.isNumber) else { continue }
+                    let titulo = candidato["titulo"] as? String ?? trabajo.busqueda
+                    estado = lista.count == 1 ? "Bajando y comprobando «\(titulo)»…"
+                                              : "Probando \(i + 1) de \(lista.count): «\(titulo)»…"
+                    if i > 0 { try? await Task.sleep(for: .seconds(Self.pausaEntreDescargas)) }
+                    guard let bajado = await bajar(paquete: id) else { continue }
+                    estado = "Comprobando que «\(titulo)» sea latino y vaya sincronizado…"
+                    switch await alProbar?(bajado, trabajo.id) ?? .nada {
+                    case .latino: return .bajado(titulo)
+                    case .soloEspaña: vioEspaña = true
+                    case .desfasado: vioDesfasado = true
+                    case .nada: break
                     }
                 }
-                return .fallo("la descarga no trajo el .srt")
+                if vioDesfasado { return .desfasado }
+                if vioEspaña { return .sinLatino }
+                return lista.isEmpty ? .noEncontrado : .fallo("ningún paquete traía un .srt en español")
             case "esperar", "noListo":
                 try? await Task.sleep(for: .seconds(6))
             case "sinLatino":
@@ -414,20 +434,26 @@ final class Navegador: NSObject, ObservableObject {
         if (texto.includes(ficha)) p += 3;
       p += Math.min(Number(f.descargas) || 0, 20000) / 2000;
       return { id: f.id, titulo: f.titulo, descripcion: f.descripcion, p };
-    }).filter(Boolean).sort((a, b) => b.p - a.p).slice(0, 4);
+    }).filter(Boolean).sort((a, b) => b.p - a.p).slice(0, 6);
 
     const deEspana = n => /espa.?a\)|\(espa.?a|castellano|spain|\bes-es\b/i.test(n || '');
+    // Ya no se decide aquí cuál es latino (fallaba con paquetes de dos .srt sin rótulo, o
+    // con descripciones que nombran «España»): se ordenan y SubFix lee el texto de cada uno.
+    const lista = [];
     for (const c of candidatas) {
       let archivos = [];
       try { archivos = await $.get('inc/ajax.php', { getContenidoSub: c.id }); } catch (e) {}
       if (!Array.isArray(archivos)) archivos = [];
       const srts = archivos.map(a => a.contenido).filter(n => /\.(srt|ssa|ass)$/i.test(n));
-      const etiquetado = srts.find(n => /latin|latam|\blat\b/i.test(n) && !deEspana(n));
-      const unico = srts.length === 1 && !deEspana(srts[0]) && !deEspana(c.descripcion) ? srts[0] : null;
-      const latino = etiquetado || unico;
-      if (latino) return { estado: 'archivo', id: String(c.id), titulo: c.titulo, archivo: latino };
+      let pista = 0;
+      if (srts.some(n => /latin|latam|\blat\b/i.test(n) && !deEspana(n))) pista = 2;
+      else if (/latin|latam|latino/.test(plano(c.descripcion))) pista = 1;
+      else if (srts.length && srts.every(deEspana)) pista = -2;
+      else if (deEspana(c.descripcion)) pista = -1;
+      lista.push({ id: String(c.id), titulo: c.titulo, srts: srts.length, pista, orden: lista.length });
     }
-    return { estado: candidatas.length ? 'sinLatino' : 'sinResultados' };
+    lista.sort((a, b) => (b.pista - a.pista) || (a.orden - b.orden));
+    return { estado: lista.length ? 'candidatos' : 'sinResultados', candidatos: lista };
     """#
 
     private static let extensiones: Set<String> = ["zip", "rar", "7z", "srt"]
@@ -499,11 +525,20 @@ extension Navegador: WKDownloadDelegate {
         }
         // Bajado a mano: a la fila que se está buscando o, si no hay, a la que le corresponda.
         let para = actual ?? (trabajos.count == 1 ? trabajos.first?.id : nil)
-        if alDescargar?(archivo, para) == true {
-            if let para { resultados[para] = .bajado(archivo.lastPathComponent) }
-            estado = "Instalado «\(archivo.lastPathComponent)»."
-        } else {
-            estado = "«\(archivo.lastPathComponent)» no traía un .srt para estos videos — prueba con otro."
+        estado = "Comprobando «\(archivo.lastPathComponent)»…"
+        Task {
+            let prueba = await alProbar?(archivo, para) ?? .nada
+            switch prueba {
+            case .latino:
+                if let para { resultados[para] = .bajado(archivo.lastPathComponent) }
+                estado = "Instalado «\(archivo.lastPathComponent)»."
+            case .soloEspaña:
+                estado = "«\(archivo.lastPathComponent)» es de España: quedó apartado por si lo quieres. Prueba con otro."
+            case .desfasado:
+                estado = "«\(archivo.lastPathComponent)» no va sincronizado con este video — prueba con otro."
+            case .nada:
+                estado = "«\(archivo.lastPathComponent)» no traía un .srt para estos videos — prueba con otro."
+            }
         }
     }
 

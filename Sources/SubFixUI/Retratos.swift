@@ -9,13 +9,14 @@ public enum Retratos {
     /// La ventana entera en la pestaña de subtítulos.
     @MainActor
     public static func peliculas(_ cola: Cola) -> some View {
-        Ventana(pestaña: .constant(.subtitulos), cola: cola, vigilante: Vigilante(),
+        Ventana(pestaña: .constant(.subtitulos), cola: cola, pistas: ColaDePistas(),
                 organizador: Organizador(demo: true), sinScroll: true)
     }
 
+    /// La pestaña «Pistas» con lo que se le haya agregado a `pistas`.
     @MainActor
-    public static func vigilancia(_ vigilante: Vigilante) -> some View {
-        Ventana(pestaña: .constant(.vigilancia), cola: Cola(), vigilante: vigilante,
+    public static func pistas(_ pistas: ColaDePistas) -> some View {
+        Ventana(pestaña: .constant(.pistas), cola: Cola(), pistas: pistas,
                 organizador: Organizador(demo: true), sinScroll: true)
     }
 
@@ -46,7 +47,7 @@ public enum Retratos {
             modelo.filas[5].resultado = .hecho
         }
         modelo.automatico = automatico
-        return Ventana(pestaña: .constant(.organizar), cola: Cola(), vigilante: Vigilante(),
+        return Ventana(pestaña: .constant(.organizar), cola: Cola(), pistas: ColaDePistas(),
                        organizador: modelo, sinScroll: true)
     }
 
