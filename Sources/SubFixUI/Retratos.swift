@@ -22,7 +22,7 @@ public enum Retratos {
 
     /// La pestaña Organizar con descargas de muestra (nombres reales de su biblioteca).
     @MainActor
-    public static func organizar(vacia: Bool = false, automatico: Bool = false) -> some View {
+    public static func organizar(vacia: Bool = false) -> some View {
         let modelo = Organizador(demo: true)
         let raiz = URL(fileURLWithPath: "/tmp/subfix-demo-\(UUID().uuidString)")
         modelo.entrada = vacia ? URL(fileURLWithPath: "/Users/snapsis/Downloads") : raiz.appendingPathComponent("Downloads")
@@ -46,7 +46,6 @@ public enum Retratos {
             }
             modelo.filas[5].resultado = .hecho
         }
-        modelo.automatico = automatico
         return Ventana(pestaña: .constant(.organizar), cola: Cola(), pistas: ColaDePistas(),
                        organizador: modelo, sinScroll: true)
     }

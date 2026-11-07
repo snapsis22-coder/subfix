@@ -148,6 +148,7 @@ public enum ErrorDeSubFix: LocalizedError {
     case yaExiste(String)
     case fallóElRemux(String)
     case fallóLaActualización(String)
+    case noSePudoMover(String)
 
     public var errorDescription: String? {
         switch self {
@@ -161,6 +162,8 @@ public enum ErrorDeSubFix: LocalizedError {
             return "No se pudo actualizar: \(detalle)"
         case .fallóElRemux(let detalle):
             return "No se pudo crear el MKV: \(detalle)"
+        case .noSePudoMover(let detalle):
+            return "No se pudo mandar a la Papelera: \(detalle)"
         case .yaExiste(let nombre):
             return "No se movió: ya hay un «\(nombre)» en la carpeta del capítulo"
         }

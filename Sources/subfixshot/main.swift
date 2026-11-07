@@ -70,7 +70,7 @@ MainActor.assumeIsolated {
     retratar(Retratos.filasDeEjemplo(), "7-filas-oscuro", en: salida, ancho: 1000, alto: 440, oscuro: true)
     retratar(Retratos.organizar(vacia: true), "8-organizar-vacia", en: salida)
     retratar(Retratos.organizar(), "9-organizar", en: salida)
-    retratar(Retratos.organizar(automatico: true), "10-organizar-oscuro", en: salida, oscuro: true)
+    retratar(Retratos.organizar(), "10-organizar-oscuro", en: salida, oscuro: true)
     retratar(Retratos.editorDeNombre(), "11-editor", en: salida, ancho: 320, alto: 330)
     retratar(Retratos.opciones(cola), "12-opciones", en: salida, ancho: 400, alto: 300)
     retratar(Retratos.peliculas(Cola()), "13-vacia-oscuro", en: salida, oscuro: true)

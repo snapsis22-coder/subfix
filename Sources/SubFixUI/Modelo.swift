@@ -22,6 +22,8 @@ public struct Fila: Identifiable, Equatable {
     var progreso: Double?
     /// Lo que se creó al terminar (el MKV nuevo), para el botón «Mostrar».
     var archivoListo: URL?
+    /// El MKV que SubFix hizo a partir de este video: si existe, este es «el viejo» y se ofrece la Papelera.
+    var versionNueva: URL?
     var inicioDeProgreso: Date?
     /// El de España que apareció cuando se buscaba latino: apartado, sin instalar,
     /// hasta que el usuario pulse «Usar el de España».
@@ -213,6 +215,7 @@ public final class Cola: ObservableObject {
             .map(Fila.init)
         filas.append(contentsOf: nuevas)
         for fila in nuevas { analizar(fila.id, fila.url) }
+        refrescarVersiones()
     }
 
     private func analizar(_ id: UUID, _ url: URL) {
@@ -361,6 +364,38 @@ public final class Cola: ObservableObject {
             fila.archivoListo = mkv
             if fila.estado == .listaParaProcesar { fila.estado = .hecha("MKV creado: \(mkv.lastPathComponent)") }
         }
+        refrescarVersiones()
+    }
+
+    /// Qué filas ya tienen su versión de SubFix al lado (el MKV que se creó en esta sesión,
+    /// aunque se llame distinto, o un «Nombre (SubFix).mkv» de antes).
+    func refrescarVersiones() {
+        for i in filas.indices {
+            let fila = filas[i]
+            if let mkv = fila.archivoListo, mkv != fila.url, mkv.pathExtension.lowercased() == "mkv",
+               FileManager.default.fileExists(atPath: mkv.path) {
+                filas[i].versionNueva = mkv
+            } else {
+                filas[i].versionNueva = Papelera.versionDeSubFix(de: fila.url)
+            }
+        }
+    }
+
+    /// Manda el video y sus .srt sueltos a la Papelera (se recuperan con «Devolver») y lo quita de la lista.
+    public func aLaPapelera(_ id: UUID) {
+        guard let fila = filas.first(where: { $0.id == id }),
+              fila.estado != .procesando, fila.estado != .analizando else { return }
+        do {
+            let enviados = try Papelera.enviar(fila.url)
+            descartadas.insert(fila.url.standardizedFileURL)
+            filas.removeAll { $0.id == id }
+            let subs = enviados.count - 1
+            aviso = nil
+            nota = "«\(fila.url.lastPathComponent)»" + (subs > 0 ? " y \(subs) subtítulo\(subs == 1 ? "" : "s")" : "")
+                + " a la Papelera. Si te equivocaste, ábrela y usa «Devolver»."
+        } catch {
+            aviso = error.localizedDescription
+        }
     }
 
     /// Deja armado el MKV de una fila: «Procesar» lo creará. Con `nil` se descarta
@@ -432,6 +467,7 @@ public final class Cola: ObservableObject {
         desdeDescargas.formUnion(nuevas.map(\.url))
         filas.append(contentsOf: nuevas)
         for fila in nuevas { analizar(fila.id, fila.url) }
+        refrescarVersiones()
     }
 
     /// Abre el selector para cambiar la carpeta que se revisa sola.
@@ -475,7 +511,7 @@ public final class Cola: ObservableObject {
         let huella = (try? TextoSRT.leer(puesto).texto).flatMap { TextoSRT.esSRT($0) ? Motor.huella($0) : nil }
         cambiar(id) { f in
             if let huella { f.descartados.insert(huella) }
-            f.forzar = huella != nil
+            f.forzar = true   // también si sólo lo traía dentro: buscar otro igual
             f.estado = .listaParaProcesar
             f.candidatoEspaña = nil
             f.progreso = nil
@@ -525,10 +561,18 @@ public final class Cola: ObservableObject {
     public var pendientes: [Fila] {
         // Una fila que falló al crear su MKV conserva el plan: se puede reintentar sin volver a armarlo.
         filas.filter { fila in
-            if fila.estado == .listaParaProcesar { return true }
+            if fila.estado == .listaParaProcesar { return motivoDeLista(fila) == nil }
             if case .fallada = fila.estado, fila.plan != nil { return true }
             return false
         }
+    }
+
+    /// Si ya no hay nada que hacerle (trae el subtítulo dentro, o un .srt bueno al lado), el porqué:
+    /// la fila sale como «Lista» y no cuenta como pendiente. «Reprocesar» la fuerza igual.
+    public func motivoDeLista(_ fila: Fila) -> String? {
+        guard fila.estado == .listaParaProcesar, fila.plan == nil, fila.pistaElegida == nil, !fila.forzar,
+              let diagnostico = fila.diagnostico else { return nil }
+        return diagnostico.yaListo(preferirLatino: preferirLatino && usarRed, extraerDelArchivo: extraerDelArchivo)
     }
 
     public func procesarTodo(solo ids: [UUID]? = nil) {
@@ -554,6 +598,7 @@ public final class Cola: ObservableObject {
                         }.value
                         cambiar(id) { $0.plan = nil; $0.progreso = nil; $0.archivoListo = mkv
                                       $0.estado = .hecha("MKV creado: \(mkv.lastPathComponent)") }
+                        refrescarVersiones()
                     } catch {
                         cambiar(id) { $0.progreso = nil; $0.estado = .fallada(error.localizedDescription) }
                     }

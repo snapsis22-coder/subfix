@@ -31,13 +31,43 @@ public enum Motor {
             return "Sin subtítulos — buscar en OpenSubtitles"
         }
 
+        /// El subtítulo latino que el video trae DENTRO (sin forzados ni para sordos).
+        public var latinoIntegrado: Pista? { pistas.first { $0.esLatino && !$0.descartable } }
+        /// Uno en español dentro del video, latino o no.
+        public var españolIntegrado: Pista? { pistas.first { ($0.esEspañol || $0.esLatino) && !$0.descartable } }
+
+        /// Si ya no hay nada que hacer, el porqué (la fila sale como «Lista» y no se busca nada).
+        /// nil = todavía hay trabajo.
+        public func yaListo(preferirLatino: Bool, extraerDelArchivo: Bool) -> String? {
+            if error != nil { return nil }
+            if srtExistente != nil {
+                guard srtEsEspañol, srtBienFormado, !(srtDeEspaña && preferirLatino) else { return nil }
+                if latinoIntegrado != nil { return "Trae el latino dentro y además un .srt aparte" }
+                return srtDeEspaña ? "Tiene el subtítulo en español en un .srt aparte, al lado del video"
+                                   : "Tiene el subtítulo latino en un .srt aparte, al lado del video"
+            }
+            guard !extraerDelArchivo else { return nil }
+            if latinoIntegrado != nil { return "Ya trae el subtítulo latino dentro del video" }
+            if !preferirLatino, españolIntegrado != nil { return "Ya trae subtítulo en español dentro del video" }
+            return nil
+        }
+
         /// Lo mismo que `plan`, contando con que se busque latino para las series.
         public func plan(preferirLatino: Bool, extraerDelArchivo: Bool = true, pistaManual: Bool = false) -> String {
+            if !pistaManual, let listo = yaListo(preferirLatino: preferirLatino, extraerDelArchivo: extraerDelArchivo) {
+                return listo
+            }
             if srtExistente != nil, srtEsEspañol, srtDeEspaña, preferirLatino {
-                return "El .srt que tiene es de España: con «Subdivx» buscas el latino"
+                return "El .srt de al lado es de España: con «Subdivx» buscas el latino"
             }
             if !extraerDelArchivo, !pistaManual, srtExistente == nil {
-                return preferirLatino ? "Buscar subtítulo en español latino en la web" : "Buscar subtítulo en español en la web"
+                if españolIntegrado != nil {
+                    return "Trae subtítulo en español dentro, pero no dice si es latino: se buscará el latino en la web"
+                }
+                return "No tiene subtítulo en español: «Buscar subtítulos» lo busca en la web"
+            }
+            if !pistaManual, srtExistente == nil, latinoIntegrado != nil {
+                return "Trae el latino dentro del video: se copiará a un .srt aparte"
             }
             guard preferirLatino, esEpisodio, error == nil, srtExistente == nil,
                   elegida?.esLatino != true else { return plan }
@@ -186,6 +216,12 @@ public enum Motor {
         }
 
         let delArchivo = opciones.extraerDelArchivo || opciones.pistaPreferida != nil
+
+        // Ya trae el subtítulo dentro y no se pidió sacarlo: no hay nada que buscar.
+        if !delArchivo, !opciones.forzar,
+           diagnostico.yaListo(preferirLatino: opciones.preferirLatino, extraerDelArchivo: false) != nil {
+            return .yaEstaba(deEspaña: false)
+        }
         let pista = delArchivo ? (opciones.pistaPreferida.flatMap { indice in
             diagnostico.pistas.first { $0.indice == indice }
         } ?? diagnostico.elegida) : nil

@@ -6,15 +6,24 @@ import UniformTypeIdentifiers
 /// Las tres secciones de la app, como pestañas dentro de la cabecera morada.
 enum Pestaña: String, CaseIterable, Identifiable {
     case subtitulos = "Subtítulos"
-    case organizar = "Organizar"
     case pistas = "Pistas"
+    case organizar = "Organizar"
 
     var id: Self { self }
+
+    /// Lo que se ve. El rawValue NO se cambia: es lo que guarda `subfix.pestaña`.
+    var titulo: String {
+        switch self {
+        case .pistas: return "Editor de video"
+        case .organizar: return "Biblioteca"
+        default: return rawValue
+        }
+    }
 
     var icono: String {
         switch self {
         case .subtitulos: return "captions.bubble.fill"
-        case .organizar: return "wand.and.stars"
+        case .organizar: return "books.vertical.fill"
         case .pistas: return "slider.horizontal.3"
         }
     }
@@ -22,8 +31,8 @@ enum Pestaña: String, CaseIterable, Identifiable {
     var lema: String {
         switch self {
         case .subtitulos: return "Deja los subtítulos listos para el televisor"
-        case .organizar: return "Ordena tus películas y series para Jellyfin y Plex"
-        case .pistas: return "Mira y cambia los audios y subtítulos de cada película"
+        case .organizar: return "Arma tu biblioteca de películas y series para Jellyfin, Plex y compañía"
+        case .pistas: return "Cambia audios y subtítulos y manda la versión vieja a la Papelera"
         }
     }
 }
@@ -34,6 +43,9 @@ public struct VistaPrincipal: View {
     @StateObject private var organizador = Organizador()
     @AppStorage("subfix.pestaña") private var pestaña = Pestaña.subtitulos
     @State private var entradaRevisada = false
+    /// La explicación de «Biblioteca» sale sola la primera vez que se entra.
+    @AppStorage("subfix.bibliotecaExplicada") private var bibliotecaExplicada = false
+    @State private var explicarBiblioteca = false
 
     public init() {}
 
@@ -45,6 +57,11 @@ public struct VistaPrincipal: View {
                 Actualizaciones.compartido.buscarSiToca()
             }
             .onChange(of: pestaña) { _, nueva in revisarEntradaSiToca(nueva) }
+            .alert("Biblioteca", isPresented: $explicarBiblioteca) {
+                Button("Entendido") { bibliotecaExplicada = true }
+            } message: {
+                Text(Self.textoDeBiblioteca)
+            }
             .onChange(of: organizador.entrada) { _, _ in revisarEntradaSiToca(pestaña) }
             // Al volver a la app (p. ej. tras terminar una descarga) se mira otra vez.
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -55,11 +72,27 @@ public struct VistaPrincipal: View {
     /// La carpeta de descargas se mira la primera vez que se abre «Organizar», no al arrancar.
     /// «Subtítulos» mira la misma carpeta cada vez que se abre: sólo agrega lo nuevo.
     private func revisarEntradaSiToca(_ p: Pestaña) {
+        if p == .organizar, !bibliotecaExplicada { explicarBiblioteca = true }
         if p == .subtitulos { cola.revisarDescargas(organizador.entrada) }
         guard p == .organizar, !entradaRevisada else { return }
         entradaRevisada = true
         organizador.revisarEntrada()
     }
+
+    static let textoDeBiblioteca = """
+        Ordena las películas y series que descargas en carpetas con nombres limpios, \
+        «Título (Año)» y «Serie/Season 01/Serie S01E01», para usarlas como biblioteca de medios \
+        en un servicio de streaming o multimedia propio:
+
+        • Jellyfin (gratis y de código abierto)
+        • Plex
+        • Emby
+        • Kodi
+        • Infuse (iPhone, iPad y Apple TV)
+        • Servidores DLNA como Universal Media Server o Serviio, que los televisores Samsung, LG y otros leen por la red
+
+        Con los nombres así, el servidor reconoce cada título y le pone solo el póster, la sinopsis y las temporadas.
+        """
 
     /// `open -a SubFix --env SUBFIX_CARGAR="/ruta/uno:/ruta/dos"` arranca con eso ya en la lista.
     /// (Rutas como argumentos no sirven: macOS las toma por documentos y no abre la ventana.)
@@ -123,9 +156,7 @@ struct Ventana: View {
         switch pestaña {
         case .subtitulos:
             EmptyView()
-        case .organizar:
-            InterruptorAutomatico(encendido: $organizador.automatico)
-        case .pistas:
+        case .organizar, .pistas:
             EmptyView()
         }
     }
@@ -194,7 +225,7 @@ struct BotonDePestaña: View {
 
     var body: some View {
         Button(action: accion) {
-            Label(pestaña.rawValue, systemImage: pestaña.icono)
+            Label(pestaña.titulo, systemImage: pestaña.icono)
                 .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                 .foregroundStyle(elegida ? Tema.morado : .white)
                 .padding(.horizontal, 14)
@@ -207,7 +238,7 @@ struct BotonDePestaña: View {
         .buttonStyle(.plain)
         .onHover { encima = $0 }
         .animation(.easeOut(duration: 0.15), value: encima)
-        .help("\(pestaña.rawValue): \(pestaña.lema.lowercased())")
+        .help("\(pestaña.titulo): \(pestaña.lema.lowercased())")
     }
 }
 
@@ -323,10 +354,11 @@ struct VistaPeliculas: View {
     /// La entrada de «Organizar»: la que se revisa si no se eligió otra aquí.
     var entradaDeOrganizar: URL? = nil
     var sinScroll = false
-    /// «Modificar pistas…» de una fila: la lleva a la pestaña «Pistas».
+    /// «Modificar pistas…» de una fila: la lleva a la pestaña «Editor de video».
     var abrirEnPistas: (URL) -> Void = { _ in }
     @State private var encima = false
     @State private var paraSubdivx: LoteSubdivx?
+    @State private var paraPapelera: Fila?
     @State private var filtro = Filtro.todas
     @State private var viendoOpciones = false
 
@@ -343,7 +375,7 @@ struct VistaPeliculas: View {
             switch filtro {
             case .todas: return true
             case .porRevisar: return fila.porRevisar
-            case .listas: return fila.terminada
+            case .listas: return fila.terminada || cola.motivoDeLista(fila) != nil
             }
         }
         var orden: [String] = []
@@ -383,6 +415,14 @@ struct VistaPeliculas: View {
             return true
         }
         .animation(.easeInOut(duration: 0.15), value: encima)
+        .alert("¿Mandar a la Papelera?", isPresented: Binding(get: { paraPapelera != nil },
+                                                               set: { if !$0 { paraPapelera = nil } }),
+               presenting: paraPapelera) { fila in
+            Button("Mandar a la Papelera", role: .destructive) { cola.aLaPapelera(fila.id) }
+            Button("Cancelar", role: .cancel) {}
+        } message: { fila in
+            Text(textoDePapelera(fila.url, versionNueva: fila.versionNueva))
+        }
         .sheet(item: $paraSubdivx) { lote in
             HojaDeSubdivx(lote: lote) { archivo, id in
                 if let id { return await cola.probarDescarga(archivo, para: id) }
@@ -421,7 +461,7 @@ struct VistaPeliculas: View {
                 Label("Opciones", systemImage: "slider.horizontal.3")
             }
             .buttonStyle(BotonSecundario(compacto: true))
-            .help("Qué hace «Procesar». Se recuerda para la próxima vez")
+            .help("Qué hace «Buscar subtítulos». Se recuerda para la próxima vez")
             .popover(isPresented: $viendoOpciones, arrowEdge: .bottom) {
                 PanelDeOpciones(cola: cola)
             }
@@ -441,7 +481,7 @@ struct VistaPeliculas: View {
         let cosas = [capitulos > 0 ? (capitulos == 1 ? "1 capítulo" : "\(capitulos) capítulos") : nil,
                      peliculas > 0 ? (peliculas == 1 ? "1 película" : "\(peliculas) películas") : nil]
         var partes = [cosas.compactMap { $0 }.joined(separator: " y ")]
-        let listas = cuantas(\.terminada), revisar = cuantas(\.porRevisar), pendientes = cola.pendientes.count
+        let listas = cuantas(\.terminada) + cola.filas.filter { cola.motivoDeLista($0) != nil }.count, revisar = cuantas(\.porRevisar), pendientes = cola.pendientes.count
         if listas > 0 { partes.append("\(listas) list\(listas == 1 ? "o" : "os")") }
         if revisar > 0 { partes.append("\(revisar) por revisar") }
         if pendientes > 0 { partes.append("\(pendientes) pendiente\(pendientes == 1 ? "" : "s")") }
@@ -455,7 +495,7 @@ struct VistaPeliculas: View {
         case (true, false): partes.append("Busca en internet")
         case (true, true): partes.append("Busca en internet y extrae del archivo")
         case (false, true): partes.append("Sólo extrae del archivo")
-        case (false, false): partes.append("⚠️ No busca en internet ni extrae: Procesar no hará nada")
+        case (false, false): partes.append("⚠️ No busca en internet ni extrae: «Buscar subtítulos» no hará nada")
         }
         if cola.preferirLatino { partes.append("sólo latino (España, si tú lo apruebas)") }
         if cola.subdivxAlTerminar { partes.append("lo que falte, a Subdivx") }
@@ -478,8 +518,10 @@ struct VistaPeliculas: View {
                     FilaDePelicula(fila: fila,
                                    preferirLatino: cola.preferirLatino && cola.usarRed,
                                    extraerDelArchivo: cola.extraerDelArchivo,
-                                   acciones: acciones(para: fila))
-                        .contextMenu { MenuDeFila(fila: fila, acciones: acciones(para: fila)) }
+                                   acciones: acciones(para: fila),
+                                   listaSinTocar: cola.motivoDeLista(fila))
+                        .contextMenu { MenuDeFila(fila: fila, acciones: acciones(para: fila),
+                                                  yaLista: cola.motivoDeLista(fila) != nil) }
                 }
             }
             if grupos.isEmpty {
@@ -502,7 +544,8 @@ struct VistaPeliculas: View {
             abrirSubdivx: { buscarEnSubdivx([fila]) },
             usarEspaña: { cola.usarEspaña(fila.id) },
             reprocesar: { cola.reprocesar(fila.id) },
-            quitar: { cola.quitar(fila.id) })
+            quitar: { cola.quitar(fila.id) },
+            papelera: { paraPapelera = fila })
     }
 
     /// Lo soltado en la ventana, todo junto para que la cola lo reciba de una vez.
@@ -556,7 +599,7 @@ struct VistaPeliculas: View {
                 .disabled(carpeta == nil)
             Button("Cambiar carpeta…") { cola.elegirCarpetaDeDescargas(porDefecto: entradaDeOrganizar) }
             Divider()
-            Button("Usar la misma de Organizar") { cola.usarLaDeOrganizar(entradaDeOrganizar) }
+            Button("Usar la misma de Biblioteca") { cola.usarLaDeOrganizar(entradaDeOrganizar) }
                 .disabled(cola.carpetaPropia == nil || entradaDeOrganizar == nil)
         }
     }
@@ -625,10 +668,10 @@ struct VistaPeliculas: View {
                 if cola.trabajando {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text("Procesando…")
+                        Text("Buscando…")
                     }
                 } else {
-                    Label(cola.pendientes.isEmpty ? "Procesar" : "Procesar \(cola.pendientes.count)",
+                    Label(cola.pendientes.isEmpty ? "Buscar subtítulos" : "Buscar subtítulos \(cola.pendientes.count)",
                           systemImage: "sparkles")
                 }
             }
@@ -760,6 +803,7 @@ public struct AccionesDeFila {
     var usarEspaña: () -> Void = {}
     var reprocesar: () -> Void = {}
     var quitar: () -> Void = {}
+    var papelera: () -> Void = {}
 
     static let ninguna = AccionesDeFila()
 }
@@ -769,9 +813,11 @@ struct FilaDePelicula: View {
     let preferirLatino: Bool
     let extraerDelArchivo: Bool
     let acciones: AccionesDeFila
+    /// Ya no hay nada que hacerle: el porqué (sale como «Lista»).
+    var listaSinTocar: String? = nil
 
     private var detalle: String {
-        fila.estado.detalle ?? fila.plan?.resumen
+        listaSinTocar ?? fila.estado.detalle ?? fila.plan?.resumen
             ?? fila.diagnostico?.plan(preferirLatino: preferirLatino, extraerDelArchivo: extraerDelArchivo,
                                      pistaManual: fila.pistaElegida != nil) ?? ""
     }
@@ -790,6 +836,7 @@ struct FilaDePelicula: View {
                         .foregroundStyle(Tema.tinta)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    if let chip = etiquetaDeVersion(fila.url, versionNueva: fila.versionNueva) { chip }
                     if fila.terminada { SelloListo().id(fila.id) }
                 }
                 .help(fila.url.path)
@@ -815,9 +862,15 @@ struct FilaDePelicula: View {
 
             botonesPrincipales
 
+            if VLC.instalado, fila.estado != .procesando {
+                Button { VLC.abrir(fila.url) } label: { Label("VLC", systemImage: "play.fill") }
+                    .buttonStyle(BotonSecundario(compacto: true))
+                    .help("Vista previa: abre «\(fila.url.lastPathComponent)» en VLC (con su .srt de al lado, si tiene)")
+            }
+
             if fila.estado != .procesando, fila.estado != .analizando {
                 Menu {
-                    MenuDeFila(fila: fila, acciones: acciones)
+                    MenuDeFila(fila: fila, acciones: acciones, yaLista: listaSinTocar != nil)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -839,6 +892,8 @@ struct FilaDePelicula: View {
         switch fila.estado {
         case .analizando: return EtiquetaSimple(texto: "Leyendo…", icono: nil, color: Tema.tintaSuave)
         case .procesando: return EtiquetaSimple(texto: "Procesando…", icono: nil, color: Tema.acento)
+        case .listaParaProcesar where listaSinTocar != nil:
+            return EtiquetaSimple(texto: "Lista", icono: "checkmark.circle.fill", color: Tema.verde)
         case .listaParaProcesar where fila.plan == nil:
             return EtiquetaSimple(texto: "Pendiente", icono: "circle.dashed", color: Tema.acento)
         default: return nil
@@ -847,6 +902,18 @@ struct FilaDePelicula: View {
 
     /// Como mucho dos botones a la vista: lo que toca hacer ahora con esta fila.
     @ViewBuilder private var botonesPrincipales: some View {
+        if fila.versionNueva != nil, fila.estado != .procesando, fila.estado != .analizando {
+            // Ya tiene su versión de SubFix: lo que toca es despedir este original.
+            Button(action: acciones.papelera) { Label("Papelera…", systemImage: "trash") }
+                .buttonStyle(BotonSecundario(compacto: true))
+                .help("Ya tiene su versión de SubFix («\(fila.versionNueva?.lastPathComponent ?? "")»): "
+                      + "manda este original y sus .srt a la Papelera")
+        } else {
+            botonesSegunEstado
+        }
+    }
+
+    @ViewBuilder private var botonesSegunEstado: some View {
         switch fila.estado {
         case .avisada:
             if fila.candidatoEspaña != nil {
@@ -911,14 +978,15 @@ struct EtiquetaSimple: View {
 struct MenuDeFila: View {
     let fila: Fila
     let acciones: AccionesDeFila
+    var yaLista = false
 
     var body: some View {
-        if fila.porRevisar || fila.terminada {
+        if fila.porRevisar || fila.terminada || yaLista {
             Button("Reprocesar (buscar otro subtítulo)", action: acciones.reprocesar)
         }
         if let diagnostico = fila.diagnostico, diagnostico.pistas.filter(\.esTexto).count > 1,
            fila.estado == .listaParaProcesar {
-            Menu("Extraer esta pista") {
+            Menu("Extraer subtítulo integrado en formato SRT") {
                 ForEach(diagnostico.pistas.filter(\.esTexto)) { pista in
                     Button {
                         acciones.elegirPista(pista.indice)
@@ -934,11 +1002,16 @@ struct MenuDeFila: View {
             Button("Usar el de España", action: acciones.usarEspaña)
         }
         Divider()
-        Button("Modificar pistas…", action: acciones.abrirPistas)
+        Button("Editar", action: acciones.abrirPistas)
+        if VLC.instalado { Button("Ver en VLC") { VLC.abrir(fila.url) } }
         Button("Mostrar en el Finder") {
             NSWorkspace.shared.activateFileViewerSelecting([fila.archivoParaMostrar])
         }
         Button("Quitar de la lista", action: acciones.quitar)
+        if fila.estado != .procesando, fila.estado != .analizando {
+            Divider()
+            Button("Mandar a la Papelera…", action: acciones.papelera)
+        }
     }
 }
 
@@ -979,6 +1052,8 @@ struct HojaDeMKV: View {
     let pendiente: Bool
     let alGuardar: (PlanDeMKV?) -> Void
     let alCrear: (URL) -> Void
+    /// Lo que ya se sabe de cada subtítulo (la fila del Editor ya lo leyó): así no se lee dos veces.
+    var variantesConocidas: [Int: Variante] = [:]
     @Environment(\.dismiss) private var cerrar
 
     @State private var audios: [PistaDeAudio] = []
@@ -993,6 +1068,11 @@ struct HojaDeMKV: View {
     @State private var idiomasSubs: [Int: Idioma] = [:]
     @State private var idiomasExternos: [URL: Idioma] = [:]
     @State private var leyendo = true
+    /// Latino, España, forzado, para sordos: leído del texto de cada subtítulo.
+    @State private var variantes: [Int: Variante] = [:]
+    @State private var clasificando = false
+    /// Si el usuario ya tocó las casillas de subtítulos, la clasificación no se las cambia.
+    @State private var subsTocados = false
     @State private var trabajando = false
     @State private var resultado: URL?
     @State private var error: String?
@@ -1008,7 +1088,9 @@ struct HojaDeMKV: View {
                   nombre: nombre == nombreInicial ? nil : Remux.nombreLimpio(nombre),
                   idiomasDeAudio: idiomasAudio.filter { audiosMarcados.contains($0.key) },
                   idiomasDeSubtitulo: idiomasSubs.filter { subsMarcados.contains($0.key) },
-                  idiomasDeAñadidos: idiomasExternos)
+                  idiomasDeAñadidos: idiomasExternos,
+                  forzados: Set(variantes.filter { $0.value.forzado }.map(\.key)).intersection(subsMarcados),
+                  paraSordos: Set(variantes.filter { $0.value.paraSordos }.map(\.key)).intersection(subsMarcados))
     }
 
     var body: some View {
@@ -1059,10 +1141,21 @@ struct HojaDeMKV: View {
                     Text(leyendo ? "Leyendo…" : "No trae subtítulos.").foregroundStyle(.secondary).padding(8)
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
+                        if clasificando {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.mini)
+                                Text("Leyendo los subtítulos para saber cuál es latino, de España, forzado o para sordos…")
+                            }
+                            .font(.callout).foregroundStyle(Tema.tintaSuave)
+                        }
                         ForEach(subtitulos) { pista in
                             HStack {
                                 marca(pista.resumen, subsMarcados.contains(pista.indice)) {
                                     alternar(&subsMarcados, pista.indice, $0)
+                                    subsTocados = true
+                                }
+                                ForEach(variantes[pista.indice]?.etiquetas ?? [], id: \.self) { etiqueta in
+                                    Chip(texto: etiqueta, color: colorDeVariante(etiqueta))
                                 }
                                 Spacer(minLength: 0)
                                 selectorDeIdioma(Binding(get: { idiomasSubs[pista.indice] },
@@ -1070,7 +1163,7 @@ struct HojaDeMKV: View {
                                                  sinCambios: pista.sinIdioma ? "Sin especificar"
                                                                              : "Como está (\(pista.idioma ?? ""))")
                                 if pista.esTexto {
-                                    Button("Extraer .srt") { extraer(pista) }
+                                    Button("Extraer subtítulo integrado en formato SRT") { extraer(pista) }
                                         .controlSize(.small)
                                         .disabled(trabajando)
                                         .help("Guarda esta pista, limpia y lista para el TV, como «\(srtJunto.lastPathComponent)»")
@@ -1126,7 +1219,7 @@ struct HojaDeMKV: View {
                 } else if planActual != nil {
                     Button("Quitar el plan") { alGuardar(nil); cerrar() }
                         .buttonStyle(BotonSecundario(compacto: true))
-                        .help("«Procesar» volverá a extraer el .srt como siempre")
+                        .help("«Buscar subtítulos» volverá a extraer el .srt como siempre")
                 }
                 Spacer()
                 Button(resultado == nil ? "Cancelar" : "Cerrar") { cerrar() }
@@ -1135,7 +1228,7 @@ struct HojaDeMKV: View {
                     .disabled(trabajando)
                 if resultado == nil {
                     if pendiente {
-                        Button("Guardar para Procesar") { alGuardar(plan); cerrar() }
+                        Button("Guardar para después") { alGuardar(plan); cerrar() }
                             .buttonStyle(BotonPrincipal())
                             .keyboardShortcut(.defaultAction)
                             .disabled(trabajando || leyendo || audiosMarcados.isEmpty)
@@ -1186,6 +1279,39 @@ struct HojaDeMKV: View {
             .layoutPriority(1)   // el nombre de la pista manda sobre la lista de idiomas
     }
 
+    private func colorDeVariante(_ etiqueta: String) -> Color {
+        switch etiqueta {
+        case "Latino": return Tema.verde
+        case "España": return Tema.ambar
+        case "Forzado": return Tema.morado
+        default: return Tema.tintaSuave
+        }
+    }
+
+    /// Pone las etiquetas y, si el usuario no armó nada todavía, deja marcado lo útil:
+    /// el latino completo y su forzado (no el de España ni los de sordos) y rotula cada uno.
+    private func aplicar(_ leidas: [Int: Variante]) {
+        variantes = leidas
+        guard planActual == nil else { return }
+        for pista in subtitulos where idiomasSubs[pista.indice] == nil {
+            guard let v = leidas[pista.indice] else { continue }
+            switch v.region {
+            case .latino: idiomasSubs[pista.indice] = Idioma.lista.first { $0.nombre == "Español (Latinoamérica)" }
+            case .españa: idiomasSubs[pista.indice] = Idioma.lista.first { $0.nombre == "Español (España)" }
+            case nil:
+                if Clasificador.esIngles(pista), v.forzado || v.paraSordos {
+                    idiomasSubs[pista.indice] = Idioma.lista.first { $0.nombre == "English" }
+                }
+            }
+        }
+        guard !subsTocados else { return }
+        let latinas = subtitulos.filter { leidas[$0.indice]?.region == .latino }
+        let completas = latinas.filter { leidas[$0.indice]?.forzado == false && leidas[$0.indice]?.paraSordos == false }
+        if !completas.isEmpty {
+            subsMarcados = Set((completas + latinas.filter { leidas[$0.indice]?.forzado == true }).map(\.indice))
+        }
+    }
+
     private func alternar<T: Hashable>(_ conjunto: inout Set<T>, _ valor: T, _ activo: Bool) {
         if activo { conjunto.insert(valor) } else { conjunto.remove(valor) }
     }
@@ -1230,6 +1356,15 @@ struct HojaDeMKV: View {
             subsMarcados = Set(todas.filter(\.esEspañol).map(\.indice))
         }
         leyendo = false
+
+        if !variantesConocidas.isEmpty {
+            aplicar(variantesConocidas)
+        } else if todas.contains(where: Clasificador.seLee) {
+            clasificando = true
+            let leidas = await Task.detached { Clasificador.clasificar(todas, de: url) }.value
+            aplicar(leidas)
+            clasificando = false
+        }
     }
 
     /// Extracción manual: deja el .srt junto a la película (lo que antes hacía «Procesar»).

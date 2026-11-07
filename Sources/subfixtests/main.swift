@@ -716,7 +716,8 @@ if let fabrica = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(whe
 // la Cola no se enteraba de que habían terminado de analizarse y el botón
 // Procesar se quedaba gris. La lista tiene que reflejarse en la cola.
 let cola = await MainActor.run { Cola() }
-await MainActor.run { cola.agregar([videoDePrueba]) }
+// Con internet: sin él, el «spa» que trae dentro ya cuenta como listo (7-nov) y no quedaría pendiente.
+await MainActor.run { cola.usarRed = true; cola.agregar([videoDePrueba]) }
 
 var listas = false
 for _ in 0..<50 {
@@ -753,7 +754,9 @@ await probarEsperando("sin extraer, el plan de la fila dice que busca en la web"
 }
 
 await probarEsperando("sin extraer (y sin red) no saca la pista embebida ni deja .srt") {
-    let r = await Motor.procesar(videoDePrueba, opciones: Motor.Opciones(usarRed: false, extraerDelArchivo: false))
+    // Pidiendo latino: el «spa» sin rótulo de adentro no basta, así que tocaría la web (apagada).
+    let r = await Motor.procesar(videoDePrueba, opciones: Motor.Opciones(usarRed: false, preferirLatino: true,
+                                                                         extraerDelArchivo: false))
     guard case .sinSubtitulos = r else { return false }
     return !FileManager.default.fileExists(atPath: Motor.destinoSRT(de: videoDePrueba).path)
 }
@@ -866,13 +869,72 @@ await probarEsperando("ventana de Subdivx: el .zip bajado se instala en su fila 
     return bien && texto.contains("ustedes")
 }
 
+print("\n▸ Latino, España, forzado y para sordos (leyendo el texto)")
+do {
+    func srt(_ lineas: [String]) -> String {
+        lineas.enumerated().map { i, l in
+            let s = i * 3
+            return "\(i + 1)\n00:\(String(format: "%02d", s / 60)):\(String(format: "%02d", s % 60)),000 --> "
+                + "00:\(String(format: "%02d", s / 60)):\(String(format: "%02d", s % 60)),900\n\(l)\n"
+        }.joined(separator: "\n")
+    }
+    func pista(_ i: Int, _ idioma: String, titulo: String? = nil) -> Pista {
+        Pista(indice: i, codec: "mov_text", idioma: idioma, titulo: titulo, forzada: false, paraSordos: false)
+    }
+    let carteles = ["EN ALGÚN LUGAR DE ALASKA", "EL CORAZÓN DE LA BESTIA", "1 SEMANA ANTES..."]
+    let latino = carteles + (1...150).map { "Ustedes vengan acá, por favor, número \($0)." }
+    let españa = ["EN ALGUNA PARTE DE ALASKA", "EN EL CORAZÓN DE LA BESTIA", "UNA SEMANA ANTES..."]
+        + (1...150).map { $0 % 10 == 0 ? "Vale, tío. Joder, \($0)." : "Venid aquí, por favor, número \($0)." }
+    let textos: [Int: String] = [
+        7: srt((1...150).map { "Come here, please, number \($0)." }),
+        8: srt((1...150).map { $0 % 2 == 0 ? "[DOOR CLOSES]" : "Come here, number \($0)." }),
+        9: srt(carteles + ["¡Ahí está!"]),
+        10: srt(latino),
+        11: srt(españa),
+    ]
+    let pistas = [pista(7, "eng"), pista(8, "eng"), pista(9, "spa"), pista(10, "spa"), pista(11, "spa")]
+    let r = Clasificador.clasificar(pistas: pistas, textos: textos)
+
+    probar("clasificar: el completo sin «vosotros» ni léxico de España es latino") {
+        r[10]?.region == .latino && r[10]?.forzado == false
+    }
+    probar("clasificar: el que dice «vale», «tío», «joder» es de España aunque casi no use «vosotros»") {
+        r[11]?.region == .españa
+    }
+    probar("clasificar: el de pocas líneas es forzado y hereda la región del completo que se le parece") {
+        r[9]?.forzado == true && r[9]?.region == .latino
+    }
+    probar("clasificar: el inglés con descripciones de sonido es para sordos; el otro no") {
+        r[8]?.paraSordos == true && r[7]?.paraSordos == false && r[7]?.forzado == false
+    }
+    probar("clasificar: «tío Roy» (parentesco) y «vale la pena» no lo vuelven de España") {
+        let ted = srt((1...150).map { $0 % 5 == 0 ? "El tío Roy dice que vale la pena." : "Ustedes ganaron, \($0)." })
+        return Clasificador.clasificar(pistas: [pista(3, "spa")], textos: [3: ted])[3]?.region == .latino
+    }
+    probar("clasificar: el título manda («Castilian», «Latin American»)") {
+        let dos = Clasificador.clasificar(pistas: [pista(4, "spa", titulo: "Castilian"), pista(5, "spa", titulo: "Latin American")],
+                                          textos: [4: srt(latino), 5: srt(latino)])
+        return dos[4]?.region == .españa && dos[5]?.region == .latino
+    }
+    probar("MKV: el forzado lleva su marca y su rótulo, y por defecto sale el latino completo") {
+        let latinoAm = Idioma.lista.first { $0.nombre == "Español (Latinoamérica)" }!
+        let plan = PlanDeMKV(audios: [1], subtitulosDelArchivo: [pista(9, "spa"), pista(10, "spa")], añadidos: [],
+                             idiomasDeSubtitulo: [9: latinoAm, 10: latinoAm], forzados: [9])
+        let texto = Remux.argumentos(video: URL(fileURLWithPath: "/p/a.mp4"), plan: plan, preparados: [],
+                                     salida: URL(fileURLWithPath: "/p/b.mkv")).joined(separator: " ")
+        return texto.contains("title=Español (Latinoamérica) (forzado)")
+            && texto.contains("-disposition:s:0 -default+forced")
+            && texto.contains("-disposition:s:1 +default-forced")
+    }
+}
+
 print("\n▸ MKV limpio (remux)")
 
 probar("los argumentos del remux: audios elegidos, sin subtítulos del original, .srt como español") {
     let args = Remux.argumentos(video: URL(fileURLWithPath: "/p/a.mkv"), subtitulo: URL(fileURLWithPath: "/p/a.srt"),
                                 audios: [2, 5], salida: URL(fileURLWithPath: "/p/.a.parcial"))
     let texto = args.joined(separator: " ")
-    return texto.contains("-map 0:v -map 0:2 -map 0:5 -map 1:0")
+    return texto.contains("-map 0:V -map 0:2 -map 0:5 -map 1:0")
         && !texto.contains("0:s") && !texto.contains("-map 0 ")
         && texto.contains("language=spa") && texto.contains("-disposition:a:1 -default")
 }
@@ -1303,10 +1365,88 @@ if let completo = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(wh
         return !FileManager.default.fileExists(atPath: Motor.destinoSRT(de: soloEspaña).path)
     }
 
+    // 7-nov: lo que el video ya trae DENTRO cuenta. Antes decía «Buscar en la web» con el latino adentro.
+    let latinoDentro = muestra("LatinoDentro.mkv", audios: [("eng", "English")],
+                            subs: [("eng", "English"), ("spa", "Español (Latinoamérica)")])
+    await probarEsperando("integrado: con el latino dentro la fila queda «Lista» y no se busca nada") {
+        let d = Motor.diagnosticar(latinoDentro)
+        let r = await Motor.procesar(latinoDentro, opciones: Motor.Opciones(usarRed: false, preferirLatino: true,
+                                                                           extraerDelArchivo: false))
+        guard case .yaEstaba = r else { return false }
+        return d.yaListo(preferirLatino: true, extraerDelArchivo: false) == "Ya trae el subtítulo latino dentro del video"
+            && d.plan(preferirLatino: true, extraerDelArchivo: false) == "Ya trae el subtítulo latino dentro del video"
+            && !FileManager.default.fileExists(atPath: Motor.destinoSRT(de: latinoDentro).path)
+    }
+    probar("integrado: con «Extraer del archivo» encendido sí hay trabajo (copiarlo a un .srt aparte)") {
+        let d = Motor.diagnosticar(latinoDentro)
+        return d.yaListo(preferirLatino: true, extraerDelArchivo: true) == nil
+            && d.plan(preferirLatino: true, extraerDelArchivo: true).contains("se copiará a un .srt aparte")
+    }
+    probar("integrado: un latino FORZADO no cuenta como subtítulo completo") {
+        let forzado = muestra("Forzado.mkv", audios: [("eng", "English")], subs: [("spa", "Latino (forzados)")])
+        return Motor.diagnosticar(forzado).latinoIntegrado == nil
+    }
+    probar("integrado: «spa» sin decir latino → busca el latino; sin pedir latino ya está") {
+        let español = muestra("Espanol.mkv", audios: [("eng", "English")], subs: [("spa", "")])
+        let d = Motor.diagnosticar(español)
+        return d.plan(preferirLatino: true, extraerDelArchivo: false).contains("no dice si es latino")
+            && d.yaListo(preferirLatino: false, extraerDelArchivo: false) == "Ya trae subtítulo en español dentro del video"
+    }
+    probar("integrado: latino dentro y además .srt aparte") {
+        try TextoSRT.escribirParaElTV(seis("¿Dónde está la niña? Ustedes vengan acá"),
+                                      en: Motor.destinoSRT(de: latinoDentro))
+        return Motor.diagnosticar(latinoDentro).yaListo(preferirLatino: true, extraerDelArchivo: false)
+            == "Trae el latino dentro y además un .srt aparte"
+    }
+
     probar("latino por defecto: un .mp4 no se toca (sólo MKV)") {
         let mp4 = carpeta.appendingPathComponent("Peli.mp4")
         try Data("no soy un mkv".utf8).write(to: mp4)
         do { _ = try CabeceraMKV.latinoPorDefecto(mp4); return false } catch { return true }
+    }
+}
+
+print("\n▸ Papelera (pestaña Pistas)")
+do {
+    let carpeta = temporal.appendingPathComponent("papelera-\(UUID().uuidString)")
+    let falsa = temporal.appendingPathComponent("papelera-falsa-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: carpeta, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(at: falsa, withIntermediateDirectories: true)
+    let nombres = ["Peli.mp4", "Peli.srt", "Peli.es.srt", "Peli.forced.srt", "Peli.srt.anterior", "Peli.srt.anterior2",
+                   "Peli (SubFix).mkv", "Peli (SubFix).srt", "Peli.nfo", "Peli.Extended.mkv", "Peli.Extended.srt",
+                   "Otra.srt"]
+    for n in nombres { try? Data("x".utf8).write(to: carpeta.appendingPathComponent(n)) }
+    let video = carpeta.appendingPathComponent("Peli.mp4")
+
+    probar("papelera: van los .srt del video y sus copias .anterior; no el del MKV nuevo ni los de otro video") {
+        let van = Papelera.acompañantes(de: video).map(\.lastPathComponent)
+        if van != ["Peli.es.srt", "Peli.forced.srt", "Peli.srt", "Peli.srt.anterior", "Peli.srt.anterior2"] {
+            print("       salió: \(van)")
+            return false
+        }
+        return true
+    }
+    probar("papelera: reconoce la versión de SubFix al lado") {
+        Papelera.versionDeSubFix(de: video)?.lastPathComponent == "Peli (SubFix).mkv"
+            && Papelera.versionDeSubFix(de: carpeta.appendingPathComponent("Otra.mkv")) == nil
+    }
+    probar("papelera: se mueven video + .srt y queda todo lo demás") {
+        let enviados = try Papelera.enviar(video) { url in
+            try FileManager.default.moveItem(at: url, to: falsa.appendingPathComponent(url.lastPathComponent))
+        }
+        let quedan = Set(try FileManager.default.contentsOfDirectory(atPath: carpeta.path))
+        return enviados.count == 6
+            && quedan == ["Peli (SubFix).mkv", "Peli (SubFix).srt", "Peli.nfo", "Peli.Extended.mkv", "Peli.Extended.srt", "Otra.srt"]
+            && ((try? FileManager.default.contentsOfDirectory(atPath: falsa.path))?.count ?? 0) == 6
+    }
+    probar("papelera: si el video no se puede mover, los .srt se quedan") {
+        let otro = carpeta.appendingPathComponent("Peli.Extended.mkv")
+        do {
+            _ = try Papelera.enviar(otro) { _ in throw CocoaError(.fileWriteNoPermission) }
+            return false
+        } catch {
+            return FileManager.default.fileExists(atPath: carpeta.appendingPathComponent("Peli.Extended.srt").path)
+        }
     }
 }
 

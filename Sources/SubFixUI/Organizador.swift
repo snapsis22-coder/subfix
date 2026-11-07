@@ -2,7 +2,6 @@ import AppKit
 import OrganizarKit
 import Foundation
 import SubFixKit
-import UserNotifications
 
 /// Una descarga en la lista. Es un struct dentro del modelo, no un objeto observable
 /// aparte: la barra inferior decide a partir de todas las filas (lección de la Cola).
@@ -28,9 +27,6 @@ public struct Descarga: Identifiable, Equatable {
 /// En qué punto está cada fila, para pintar su etiqueta.
 public enum EstadoDeDescarga: Equatable {
     case listo, sinAño, noEntiendo, enOrden, choque(String), moviendo, hecho, fallo(String)
-
-    /// Lo que el modo automático se atreve a mover sin preguntar.
-    var esSeguro: Bool { self == .listo }
 }
 
 @MainActor
@@ -45,18 +41,8 @@ public final class Organizador: ObservableObject {
     @Published public var trabajando = false
     @Published public var ultimoLote: [Movimiento] = []
     @Published public var mensaje: String?
-    @Published public var automatico = false {
-        didSet {
-            guard !demo else { return }     // los retratos no tienen bundle para avisos
-            UserDefaults.standard.set(automatico, forKey: "organizar.automatico")
-            automatico ? arrancarVigilancia() : detenerVigilancia()
-        }
-    }
 
     private let demo: Bool
-    private var reloj: Timer?
-    /// Tamaño de cada descarga en la vuelta anterior: si no cambió, ya terminó de bajar.
-    private var tamañosPrevios: [String: Int64] = [:]
 
     public init(demo: Bool = false) {
         self.demo = demo
@@ -65,7 +51,6 @@ public final class Organizador: ObservableObject {
             ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         peliculas = Self.leer("peliculas") ?? Self.siExiste("/Volumes/DATOS/Peliculas")
         series = Self.leer("series") ?? Self.siExiste("/Volumes/DATOS/Series")
-        if UserDefaults.standard.bool(forKey: "organizar.automatico") { automatico = true }
     }
 
     private static func siExiste(_ ruta: String) -> URL? {
@@ -230,8 +215,6 @@ public final class Organizador: ObservableObject {
                 mensaje! += ". El nombre de descarga quedó sólo en «Obtener información» de "
                     + sinEtiqueta.joined(separator: ", ") + " (el MKV no tenía espacio para guardarlo dentro)"
             }
-            if automatico { avisar("SubFix organizó \(bien == 1 ? "1 descarga" : "\(bien) descargas")",
-                                   lote.compactMap { $0.lectura?.carpeta }.joined(separator: ", ")) }
         }
     }
 
@@ -252,56 +235,7 @@ public final class Organizador: ObservableObject {
         }
     }
 
-    // MARK: - Modo automático
-
-    /// Repasa la entrada cada 30 segundos, igual que la pestaña Vigilar: una
-    /// descarga tarda minutos, así que medio minuto de retraso no se nota.
-    private func arrancarVigilancia() {
-        guard entrada != nil else { automatico = false; return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        reloj = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.vuelta() }
-        }
-        Task { await vuelta() }
-    }
-
-    private func detenerVigilancia() {
-        reloj?.invalidate()
-        reloj = nil
-        tamañosPrevios = [:]
-    }
-
-    private func vuelta() async {
-        guard automatico, !trabajando else { return }
-        revisarEntrada()
-        var quietas: [Descarga] = []
-        var tamaños: [String: Int64] = [:]
-        for fila in filas where fila.resultado == nil && estado(de: fila).esSeguro {
-            let ruta = fila.examen.origen.path
-            let tamaño = Self.tamaño(de: fila.examen.origen)
-            tamaños[ruta] = tamaño
-            // Solo lo que no cambió de tamaño desde la vuelta anterior y no tiene
-            // pedazos a medio bajar.
-            if let previo = tamañosPrevios[ruta], previo == tamaño, !Self.aMedioBajar(fila.examen.origen) {
-                quietas.append(fila)
-            }
-        }
-        tamañosPrevios = tamaños
-        if !quietas.isEmpty { await organizar(quietas) }
-    }
-
-    nonisolated static func tamaño(de url: URL) -> Int64 {
-        let claves: Set<URLResourceKey> = [.fileSizeKey, .isDirectoryKey]
-        guard let valores = try? url.resourceValues(forKeys: claves) else { return 0 }
-        if valores.isDirectory != true { return Int64(valores.fileSize ?? 0) }
-        var total: Int64 = 0
-        let recorrido = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey])
-        while let hijo = recorrido?.nextObject() as? URL {
-            total += Int64((try? hijo.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-        }
-        return total
-    }
-
+    /// Pedazos a medio bajar (.part, .crdownload…): eso no se toca todavía.
     nonisolated static func aMedioBajar(_ url: URL) -> Bool {
         let pedazos: Set<String> = ["part", "crdownload", "download", "!qb", "!ut", "tmp", "partial"]
         if pedazos.contains(url.pathExtension.lowercased()) { return true }
@@ -310,15 +244,6 @@ public final class Organizador: ObservableObject {
             if pedazos.contains(hijo.pathExtension.lowercased()) { return true }
         }
         return false
-    }
-
-    private func avisar(_ titulo: String, _ cuerpo: String) {
-        let contenido = UNMutableNotificationContent()
-        contenido.title = titulo
-        contenido.body = cuerpo
-        contenido.sound = .default
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: contenido, trigger: nil))
     }
 
     // MARK: - Elegir carpetas

@@ -68,55 +68,6 @@ struct VistaOrganizar: View {
     }
 }
 
-/// Píldora con interruptor para la cabecera morada (Automático, Vigilar…).
-struct InterruptorAutomatico: View {
-    @Binding var encendido: Bool
-    var titulo = "Automático"
-    var textoEncendido = "Vigilando descargas"
-    var icono = "bolt"
-    var ayuda = "Organiza solo lo que termine de bajar en la carpeta de entrada, cada 30 segundos, mientras la app esté abierta"
-    var activo = true
-    @State private var encima = false
-
-    var body: some View {
-        Button { encendido.toggle() } label: {
-            HStack(spacing: 10) {
-                Image(systemName: encendido ? "\(icono).fill" : "\(icono).slash.fill")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(encendido ? Tema.morado : .white)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(encendido ? .white : .white.opacity(0.18)))
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(titulo)
-                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                    Text(encendido ? textoEncendido : "Apagado")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .opacity(0.8)
-                }
-                .foregroundStyle(.white)
-                // El interruptor dibujado a mano: el del sistema se ve gris sobre el morado.
-                Capsule()
-                    .fill(encendido ? .white : .white.opacity(0.25))
-                    .frame(width: 34, height: 20)
-                    .overlay(alignment: encendido ? .trailing : .leading) {
-                        Circle().fill(encendido ? Tema.morado : .white)
-                            .frame(width: 16, height: 16).padding(2)
-                    }
-            }
-            .padding(.leading, 6).padding(.trailing, 10).padding(.vertical, 6)
-            .background(Capsule().fill(.white.opacity(encima ? 0.22 : 0.14)))
-            .overlay(Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 1))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(!activo)
-        .opacity(activo ? 1 : 0.55)
-        .onHover { encima = $0 }
-        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: encendido)
-        .help(ayuda)
-    }
-}
-
 // MARK: - Carpetas
 
 struct TiraDeCarpetas: View {
@@ -563,7 +514,7 @@ struct BarraOrganizar: View {
 
             Button { Task { await modelo.organizar() } } label: {
                 Label(modelo.porMover.isEmpty ? "Organizar" : "Organizar \(modelo.porMover.count)",
-                      systemImage: "wand.and.stars")
+                      systemImage: "folder.fill.badge.plus")
             }
             .buttonStyle(BotonPrincipal())
             .disabled(modelo.porMover.isEmpty || modelo.trabajando || modelo.bibliotecas == nil)

@@ -87,10 +87,17 @@ public struct PlanDeMKV: Equatable, Sendable {
     public var idiomasDeSubtitulo: [Int: Idioma]
     /// Idioma de cada .srt añadido; sin entrada = Español.
     public var idiomasDeAñadidos: [URL: Idioma]
+    /// Subtítulos del archivo que son forzados o para sordos (por índice): se rotulan así
+    /// («Español (Latinoamérica) (forzado)») y llevan su marca, que el TV y VLC entienden.
+    public var forzados: Set<Int>
+    public var paraSordos: Set<Int>
 
     public init(audios: [Int], subtitulosDelArchivo: [Pista], añadidos: [URL],
                 nombre: String? = nil, idiomasDeAudio: [Int: Idioma] = [:],
-                idiomasDeSubtitulo: [Int: Idioma] = [:], idiomasDeAñadidos: [URL: Idioma] = [:]) {
+                idiomasDeSubtitulo: [Int: Idioma] = [:], idiomasDeAñadidos: [URL: Idioma] = [:],
+                forzados: Set<Int> = [], paraSordos: Set<Int> = []) {
+        self.forzados = forzados
+        self.paraSordos = paraSordos
         self.audios = audios
         self.subtitulosDelArchivo = subtitulosDelArchivo
         self.añadidos = añadidos
@@ -145,7 +152,10 @@ public enum Remux {
         let audios = plan.audios, conservar = plan.subtitulosDelArchivo
         var args = ["-nostdin", "-v", "error", "-y", "-i", video.path]
         for srt in preparados { args += ["-i", srt.path] }
-        args += ["-map", "0:v"]
+        // «V» mayúscula: solo video real. Con «v» entraba la carátula del MP4 (mjpeg
+        // attached_pic); el ffmpeg mínimo no lee JPEG, la ve de 0×0 y el muxer de MKV
+        // se niega: «dimensions not set».
+        args += ["-map", "0:V"]
         for indice in audios { args += ["-map", "0:\(indice)"] }
         for pista in conservar { args += ["-map", "0:\(pista.indice)"] }
         for k in preparados.indices { args += ["-map", "\(k + 1):0"] }
@@ -165,17 +175,39 @@ public enum Remux {
             if let idioma = plan.idiomasDeAudio[indice] { args += rotular("a", i, idioma) }
         }
         for (i, pista) in conservar.enumerated() {
-            if let idioma = plan.idiomasDeSubtitulo[pista.indice] { args += rotular("s", i, idioma) }
+            let extra = plan.forzados.contains(pista.indice) ? " (forzado)"
+                : plan.paraSordos.contains(pista.indice) ? " (para sordos)" : ""
+            if let idioma = plan.idiomasDeSubtitulo[pista.indice] {
+                args += ["-metadata:s:s:\(i)", "language=\(idioma.codigo)",
+                         "-metadata:s:s:\(i)", "title=\(idioma == .sinIdioma && extra.isEmpty ? "" : idioma.nombre + extra)"]
+            } else if !extra.isEmpty {
+                let base = pista.titulo?.isEmpty == false ? pista.titulo! : (pista.idioma ?? "")
+                let titulo = base.isEmpty ? String(extra.dropFirst()) : base + extra   // «(forzado)» sin espacio delante
+                args += ["-metadata:s:s:\(i)", "title=\(titulo)"]
+            }
         }
         for (k, url) in plan.añadidos.enumerated() where k < preparados.count {
             args += rotular("s", conservar.count + k, plan.idiomasDeAñadidos[url] ?? .español)
         }
 
-        // Sólo uno por defecto: el añadido, o si no hay, el primero en español del archivo.
+        // Sólo uno por defecto: el añadido; si no hay, el latino completo del archivo; si no,
+        // el primer español completo. Nunca un forzado ni uno para sordos.
         let total = conservar.count + preparados.count
-        let porDefecto = !preparados.isEmpty ? conservar.count : conservar.firstIndex(where: \.esEspañol)
+        let completo = { (p: Pista) in !plan.forzados.contains(p.indice) && !plan.paraSordos.contains(p.indice) }
+        let esLatino = { (p: Pista) in
+            p.esLatino || (plan.idiomasDeSubtitulo[p.indice].map { Idioma.diceLatino($0.nombre) } ?? false)
+        }
+        let porDefecto = !preparados.isEmpty ? conservar.count
+            : conservar.firstIndex { completo($0) && esLatino($0) }
+            ?? conservar.firstIndex { completo($0) && ($0.esEspañol || plan.idiomasDeSubtitulo[$0.indice]?.codigo == "spa") }
         for i in 0..<total {
-            args += ["-disposition:s:\(i)", i == porDefecto ? "+default" : "-default"]
+            var marcas = i == porDefecto ? "+default" : "-default"
+            if i < conservar.count {
+                let indice = conservar[i].indice
+                marcas += plan.forzados.contains(indice) ? "+forced" : "-forced"
+                if plan.paraSordos.contains(indice) { marcas += "+hearing_impaired" }
+            }
+            args += ["-disposition:s:\(i)", marcas]
         }
         // El primer audio se reproduce por defecto; el resto, no.
         for (posicion, _) in audios.enumerated() {

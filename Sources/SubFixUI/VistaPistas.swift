@@ -10,7 +10,11 @@ public struct VideoConPistas: Identifiable, Equatable {
     public internal(set) var url: URL
     var audios: [PistaDeAudio] = []
     var subtitulos: [Pista] = []
+    /// Latino, España, forzado, para sordos: leído del texto (llega un momento después de las pistas).
+    var variantes: [Int: Variante] = [:]
     var estado: Estado = .leyendo
+    /// El MKV que SubFix hizo a partir de este video: si existe, este es «el viejo».
+    var versionNueva: URL?
 
     enum Estado: Equatable {
         case leyendo
@@ -59,6 +63,9 @@ public final class ColaDePistas: ObservableObject {
             .map { VideoConPistas(url: $0) }
         videos.append(contentsOf: nuevos)
         for video in nuevos { leer(video.id) }
+        for i in videos.indices where videos[i].versionNueva == nil {
+            videos[i].versionNueva = Papelera.versionDeSubFix(de: videos[i].url)
+        }
     }
 
     func leer(_ id: UUID) {
@@ -73,6 +80,9 @@ public final class ColaDePistas: ObservableObject {
                     if v.estado == .leyendo { v.estado = audios.isEmpty && subtitulos.isEmpty ? .fallo("no pude leer sus pistas") : .listo }
                 }
             }
+            guard subtitulos.contains(where: Clasificador.seLee) else { return }
+            let variantes = Clasificador.clasificar(subtitulos, de: url)
+            await MainActor.run { self.cambiar(id) { $0.variantes = variantes } }
         }
     }
 
@@ -86,8 +96,22 @@ public final class ColaDePistas: ObservableObject {
 
     /// La hoja creó un MKV nuevo a partir de este video: se anota y se agrega a la lista.
     func mkvCreado(_ id: UUID, _ mkv: URL) {
-        cambiar(id) { $0.estado = .hecho("MKV nuevo: \(mkv.lastPathComponent)") }
+        cambiar(id) { $0.estado = .hecho("MKV nuevo: \(mkv.lastPathComponent)"); $0.versionNueva = mkv }
         agregar([mkv])
+    }
+
+    /// Manda el video y sus .srt sueltos a la Papelera (se recuperan con «Devolver») y lo quita de la lista.
+    func aLaPapelera(_ id: UUID) {
+        guard let video = videos.first(where: { $0.id == id }), video.estado != .trabajando else { return }
+        do {
+            let enviados = try Papelera.enviar(video.url)
+            videos.removeAll { $0.id == id }
+            let subs = enviados.count - 1
+            nota = "«\(video.url.lastPathComponent)»" + (subs > 0 ? " y \(subs) subtítulo\(subs == 1 ? "" : "s")" : "")
+                + " a la Papelera. Si te equivocaste, ábrela y usa «Devolver»."
+        } catch {
+            cambiar(id) { $0.estado = .fallo(error.localizedDescription) }
+        }
     }
 
     public var paraLatino: [VideoConPistas] { videos.filter { $0.esMKV && $0.estado != .leyendo && $0.estado != .trabajando } }
@@ -140,6 +164,7 @@ struct VistaPistas: View {
     var sinScroll = false
     @State private var encima = false
     @State private var editando: VideoConPistas?
+    @State private var paraPapelera: VideoConPistas?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -171,9 +196,18 @@ struct VistaPistas: View {
             }
             return true
         }
+        .alert("¿Mandar a la Papelera?", isPresented: Binding(get: { paraPapelera != nil },
+                                                               set: { if !$0 { paraPapelera = nil } }),
+               presenting: paraPapelera) { video in
+            Button("Mandar a la Papelera", role: .destructive) { cola.aLaPapelera(video.id) }
+            Button("Cancelar", role: .cancel) {}
+        } message: { video in
+            Text(textoDePapelera(video.url, versionNueva: video.versionNueva))
+        }
         .sheet(item: $editando) { video in
             HojaDeMKV(video: video.url, planActual: nil, pendiente: false,
-                      alGuardar: { _ in }, alCrear: { cola.mkvCreado(video.id, $0) })
+                      alGuardar: { _ in }, alCrear: { cola.mkvCreado(video.id, $0) },
+                      variantesConocidas: video.variantes)
         }
     }
 
@@ -233,6 +267,7 @@ struct VistaPistas: View {
                              editar: { editando = video },
                              latino: { cola.latinoPorDefecto([video.id]) },
                              quitar: { cola.quitar(video.id) },
+                             papelera: { paraPapelera = video },
                              ocupada: cola.trabajando)
             }
         }
@@ -288,6 +323,7 @@ struct FilaDePistas: View {
     let editar: () -> Void
     let latino: () -> Void
     let quitar: () -> Void
+    let papelera: () -> Void
     let ocupada: Bool
 
     var body: some View {
@@ -301,6 +337,7 @@ struct FilaDePistas: View {
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
                         .foregroundStyle(Tema.tinta)
                         .lineLimit(1).truncationMode(.middle)
+                    if let chip = etiquetaDeVersion(video.url, versionNueva: video.versionNueva) { chip }
                 }
                 .help(video.url.path)
 
@@ -312,7 +349,13 @@ struct FilaDePistas: View {
                     renglon("Subtítulos", icono: "captions.bubble",
                             video.subtitulos.map { pista in
                                 var n = nombre(idioma: pista.idioma, titulo: pista.titulo)
-                                if pista.forzada, !n.lowercased().contains("forz"), !n.lowercased().contains("forced") { n += " (forzado)" }
+                                if let v = video.variantes[pista.indice] {
+                                    // «español · latino · forzado»: lo leído del texto, sin repetir lo que ya dice el título.
+                                    for etiqueta in v.etiquetas.map({ $0.lowercased() })
+                                        where !n.lowercased().contains(etiqueta.prefix(5)) { n += " · \(etiqueta)" }
+                                } else if pista.forzada, !n.lowercased().contains("forz"), !n.lowercased().contains("forced") {
+                                    n += " (forzado)"
+                                }
                                 if pista.esImagen { n += " · imagen" }
                                 return (n, pista.porDefecto)
                             })
@@ -341,6 +384,17 @@ struct FilaDePistas: View {
                         .help("Deja automático el subtítulo latino y, si lo trae, el audio latino. "
                               + "Cambia este mismo archivo (sólo la cabecera, en un segundo)")
                 }
+                if VLC.instalado {
+                    Button { VLC.abrir(video.url) } label: { Label("Ver en VLC", systemImage: "play.fill") }
+                        .buttonStyle(BotonSecundario(compacto: true))
+                        .help("Vista previa: abre este video en VLC (con su .srt de al lado, si tiene)")
+                }
+                if video.versionNueva != nil {
+                    Button(action: papelera) { Label("Papelera…", systemImage: "trash") }
+                        .buttonStyle(BotonSecundario(compacto: true))
+                        .disabled(video.estado == .trabajando)
+                        .help("Ya tiene su versión de SubFix: manda este original y sus .srt a la Papelera")
+                }
             }
         }
         .padding(.horizontal, 14)
@@ -350,8 +404,11 @@ struct FilaDePistas: View {
             Button("Editar pistas…", action: editar)
             if video.esMKV { Button("Latino por defecto", action: latino).disabled(ocupada) }
             Divider()
+            if VLC.instalado { Button("Ver en VLC") { VLC.abrir(video.url) } }
             Button("Mostrar en el Finder") { NSWorkspace.shared.activateFileViewerSelecting([video.url]) }
             Button("Quitar de la lista", action: quitar)
+            Divider()
+            Button("Mandar a la Papelera…", action: papelera).disabled(video.estado == .trabajando)
         }
     }
 
@@ -381,5 +438,44 @@ struct FilaDePistas: View {
             }
         }
         .help(pistas.map { ($0.1 ? "★ " : "") + $0.0 }.joined(separator: "\n"))
+    }
+}
+
+/// Lo que se va a la Papelera (con tamaño) y lo que se queda, para decidir sin abrir el Finder.
+/// Lo usan el Editor de video y Subtítulos.
+func textoDePapelera(_ video: URL, versionNueva: URL?) -> String {
+    func tamaño(_ url: URL) -> String {
+        let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+    var lineas = ["Se van:", "• \(video.lastPathComponent) (\(tamaño(video)))"]
+    lineas += Papelera.acompañantes(de: video).map { "• \($0.lastPathComponent)" }
+    if let nueva = versionNueva, FileManager.default.fileExists(atPath: nueva.path) {
+        lineas += ["", "Se queda: \(nueva.lastPathComponent) (\(tamaño(nueva)))"]
+    }
+    lineas += ["", "Puedes recuperarlos desde la Papelera con «Devolver»."]
+    return lineas.joined(separator: "\n")
+}
+
+/// El formato de cada video («MKV», «MP4»…); además «SubFix · MKV» en el que creó SubFix y
+/// «Original · MP4» en el que ya tiene su versión nueva: dos filas con el mismo título se
+/// distinguen sin pasar el ratón.
+func etiquetaDeVersion(_ url: URL, versionNueva: URL?) -> Chip? {
+    let ext = url.pathExtension.uppercased()
+    if url.deletingPathExtension().lastPathComponent.contains(" (SubFix"), ext == "MKV" {
+        return Chip(texto: "SubFix · MKV", color: Tema.verde)
+    }
+    if versionNueva != nil { return Chip(texto: "Original · \(ext)", color: Tema.tintaSuave) }
+    return ext.isEmpty ? nil : Chip(texto: ext, color: Tema.tintaSuave)
+}
+
+/// Vista previa: abrir el video en VLC, que lee MKV, eac3, Dolby Vision… y carga solo
+/// el .srt de al lado. (AVPlayer, el de macOS, no abre MKV.) Sin VLC, el botón no sale.
+enum VLC {
+    static var app: URL? { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "org.videolan.vlc") }
+    static var instalado: Bool { app != nil }
+    static func abrir(_ video: URL) {
+        guard let app else { return }
+        NSWorkspace.shared.open([video], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
     }
 }
